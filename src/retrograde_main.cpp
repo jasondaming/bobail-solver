@@ -6,8 +6,56 @@
 #include <iostream>
 #include <chrono>
 #include <iomanip>
+#include <string>
+#include <cstring>
 
-int main() {
+void print_usage(const char* prog) {
+    std::cerr << "Usage: " << prog << " [options]\n"
+              << "Options:\n"
+              << "  --checkpoint FILE   Set checkpoint file for save/resume\n"
+              << "  --resume FILE       Resume from existing checkpoint\n"
+              << "  --interval N        Save checkpoint every N states (default: 1000000)\n"
+              << "  --help              Show this help\n";
+}
+
+int main(int argc, char* argv[]) {
+    std::string checkpoint_file;
+    std::string resume_file;
+    uint64_t checkpoint_interval = 1000000;
+
+    // Parse arguments
+    for (int i = 1; i < argc; ++i) {
+        if (std::strcmp(argv[i], "--help") == 0) {
+            print_usage(argv[0]);
+            return 0;
+        } else if (std::strcmp(argv[i], "--checkpoint") == 0) {
+            if (i + 1 < argc) {
+                checkpoint_file = argv[++i];
+            } else {
+                std::cerr << "Error: --checkpoint requires a filename\n";
+                return 1;
+            }
+        } else if (std::strcmp(argv[i], "--resume") == 0) {
+            if (i + 1 < argc) {
+                resume_file = argv[++i];
+            } else {
+                std::cerr << "Error: --resume requires a filename\n";
+                return 1;
+            }
+        } else if (std::strcmp(argv[i], "--interval") == 0) {
+            if (i + 1 < argc) {
+                checkpoint_interval = std::stoull(argv[++i]);
+            } else {
+                std::cerr << "Error: --interval requires a number\n";
+                return 1;
+            }
+        } else {
+            std::cerr << "Unknown option: " << argv[i] << "\n";
+            print_usage(argv[0]);
+            return 1;
+        }
+    }
+
     // Initialize tables
     bobail::init_move_tables();
     bobail::init_zobrist();
@@ -23,6 +71,30 @@ int main() {
 
     // Create solver
     bobail::RetrogradeSolver solver;
+
+    // Load checkpoint if resuming
+    if (!resume_file.empty()) {
+        std::cout << "Resuming from checkpoint: " << resume_file << "\n";
+        if (!solver.load_checkpoint(resume_file)) {
+            std::cerr << "Failed to load checkpoint, starting fresh\n";
+        } else {
+            std::cout << "Checkpoint loaded successfully\n";
+            std::cout << "Current phase: " << static_cast<int>(solver.current_phase()) << "\n";
+            std::cout << "States loaded: " << solver.num_states() << "\n\n";
+        }
+    }
+
+    // Set checkpoint file for auto-save
+    if (!checkpoint_file.empty()) {
+        solver.set_checkpoint_file(checkpoint_file);
+        solver.set_checkpoint_interval(checkpoint_interval);
+        std::cout << "Checkpointing to: " << checkpoint_file
+                  << " every " << checkpoint_interval << " states\n\n";
+    } else if (!resume_file.empty()) {
+        // If resuming but no new checkpoint file, use the resume file
+        solver.set_checkpoint_file(resume_file);
+        solver.set_checkpoint_interval(checkpoint_interval);
+    }
 
     // Progress callback
     solver.set_progress_callback([](const char* phase, uint64_t current, uint64_t total) {

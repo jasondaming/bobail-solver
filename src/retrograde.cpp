@@ -4,43 +4,80 @@
 #include "symmetry.h"
 #include <queue>
 #include <iostream>
+#include <fstream>
+#include <cstring>
 
 namespace bobail {
+
+// Checkpoint file format version
+static const uint32_t CHECKPOINT_VERSION = 1;
+static const char CHECKPOINT_MAGIC[] = "BBCK";
 
 RetrogradeSolver::RetrogradeSolver() {}
 
 bool RetrogradeSolver::solve() {
-    // Phase 1: Enumerate all reachable states
-    if (progress_cb_) progress_cb_("Enumerating states", 0, 0);
-    enumerate_states();
+    // Resume from current phase or start fresh
+    if (phase_ == SolvePhase::NOT_STARTED || phase_ == SolvePhase::ENUMERATING) {
+        // Phase 1: Enumerate all reachable states
+        if (progress_cb_) progress_cb_("Enumerating states", 0, 0);
+        phase_ = SolvePhase::ENUMERATING;
+        enumerate_states();
+        phase_ = SolvePhase::BUILDING_PREDECESSORS;
+        if (!checkpoint_file_.empty()) save_checkpoint(checkpoint_file_);
+    }
 
-    // Phase 2: Build predecessor graph
-    if (progress_cb_) progress_cb_("Building predecessors", 0, states_.size());
-    build_predecessors();
+    if (phase_ == SolvePhase::BUILDING_PREDECESSORS) {
+        // Phase 2: Build predecessor graph
+        if (progress_cb_) progress_cb_("Building predecessors", 0, states_.size());
+        build_predecessors();
+        phase_ = SolvePhase::MARKING_TERMINALS;
+        if (!checkpoint_file_.empty()) save_checkpoint(checkpoint_file_);
+    }
 
-    // Phase 3: Mark terminal states
-    if (progress_cb_) progress_cb_("Marking terminals", 0, states_.size());
-    mark_terminals();
+    if (phase_ == SolvePhase::MARKING_TERMINALS) {
+        // Phase 3: Mark terminal states
+        if (progress_cb_) progress_cb_("Marking terminals", 0, states_.size());
+        mark_terminals();
+        phase_ = SolvePhase::PROPAGATING;
+        if (!checkpoint_file_.empty()) save_checkpoint(checkpoint_file_);
+    }
 
-    // Phase 4: Retrograde propagation
-    if (progress_cb_) progress_cb_("Propagating", 0, states_.size());
-    propagate();
+    if (phase_ == SolvePhase::PROPAGATING) {
+        // Phase 4: Retrograde propagation
+        if (progress_cb_) progress_cb_("Propagating", 0, states_.size());
+        propagate();
+        phase_ = SolvePhase::COMPLETE;
+        if (!checkpoint_file_.empty()) save_checkpoint(checkpoint_file_);
+    }
 
     return true;
 }
 
 void RetrogradeSolver::enumerate_states() {
-    // BFS from starting position
-    State start = State::starting_position();
-    auto [canonical_start, _] = canonicalize(start);
-    uint64_t start_packed = pack_state(canonical_start);
-
-    start_id_ = get_or_create_state(start_packed);
-
     std::queue<uint32_t> queue;
-    queue.push(start_id_);
 
-    uint64_t processed = 0;
+    // Check if resuming from checkpoint
+    if (!enum_queue_.empty()) {
+        // Restore queue from checkpoint
+        for (uint32_t id : enum_queue_) {
+            queue.push(id);
+        }
+        enum_queue_.clear();
+        if (progress_cb_) {
+            progress_cb_("Resuming enumeration", enum_processed_, states_.size());
+        }
+    } else {
+        // Fresh start - BFS from starting position
+        State start = State::starting_position();
+        auto [canonical_start, _] = canonicalize(start);
+        uint64_t start_packed = pack_state(canonical_start);
+
+        start_id_ = get_or_create_state(start_packed);
+        queue.push(start_id_);
+        enum_processed_ = 0;
+    }
+
+    uint64_t last_checkpoint = enum_processed_;
 
     while (!queue.empty()) {
         uint32_t id = queue.front();
@@ -52,6 +89,7 @@ void RetrogradeSolver::enumerate_states() {
         GameResult gr = check_terminal(s);
         if (gr != GameResult::ONGOING) {
             states_[id].num_successors = 0;
+            ++enum_processed_;
             continue;
         }
 
@@ -61,6 +99,7 @@ void RetrogradeSolver::enumerate_states() {
 
         if (moves.empty()) {
             // No moves = loss for current player (this is a terminal too)
+            ++enum_processed_;
             continue;
         }
 
@@ -78,9 +117,26 @@ void RetrogradeSolver::enumerate_states() {
             }
         }
 
-        ++processed;
-        if (progress_cb_ && processed % 100000 == 0) {
-            progress_cb_("Enumerating states", processed, states_.size());
+        ++enum_processed_;
+        if (progress_cb_ && enum_processed_ % 100000 == 0) {
+            progress_cb_("Enumerating states", enum_processed_, states_.size());
+        }
+
+        // Auto-checkpoint during enumeration
+        if (!checkpoint_file_.empty() &&
+            checkpoint_interval_ > 0 &&
+            enum_processed_ - last_checkpoint >= checkpoint_interval_) {
+            // Save queue to enum_queue_ for checkpoint
+            std::vector<uint32_t> queue_copy;
+            std::queue<uint32_t> temp = queue;
+            while (!temp.empty()) {
+                queue_copy.push_back(temp.front());
+                temp.pop();
+            }
+            enum_queue_ = std::move(queue_copy);
+            save_checkpoint(checkpoint_file_);
+            enum_queue_.clear();
+            last_checkpoint = enum_processed_;
         }
     }
 
@@ -304,6 +360,128 @@ Result RetrogradeSolver::starting_result() const {
         return states_[start_id_].result;
     }
     return Result::UNKNOWN;
+}
+
+bool RetrogradeSolver::save_checkpoint(const std::string& filename) const {
+    std::ofstream out(filename, std::ios::binary);
+    if (!out) {
+        std::cerr << "Failed to open checkpoint file for writing: " << filename << "\n";
+        return false;
+    }
+
+    // Write header
+    out.write(CHECKPOINT_MAGIC, 4);
+    out.write(reinterpret_cast<const char*>(&CHECKPOINT_VERSION), sizeof(CHECKPOINT_VERSION));
+
+    // Write phase
+    uint32_t phase_val = static_cast<uint32_t>(phase_);
+    out.write(reinterpret_cast<const char*>(&phase_val), sizeof(phase_val));
+
+    // Write statistics
+    out.write(reinterpret_cast<const char*>(&num_wins_), sizeof(num_wins_));
+    out.write(reinterpret_cast<const char*>(&num_losses_), sizeof(num_losses_));
+    out.write(reinterpret_cast<const char*>(&num_draws_), sizeof(num_draws_));
+    out.write(reinterpret_cast<const char*>(&start_id_), sizeof(start_id_));
+    out.write(reinterpret_cast<const char*>(&enum_processed_), sizeof(enum_processed_));
+
+    // Write number of states
+    uint64_t num_states = states_.size();
+    out.write(reinterpret_cast<const char*>(&num_states), sizeof(num_states));
+
+    // Write each state (packed + result + num_successors + winning_succs)
+    // We don't save predecessors - they will be rebuilt
+    for (const auto& state : states_) {
+        out.write(reinterpret_cast<const char*>(&state.packed), sizeof(state.packed));
+        uint8_t result_val = static_cast<uint8_t>(state.result);
+        out.write(reinterpret_cast<const char*>(&result_val), sizeof(result_val));
+        out.write(reinterpret_cast<const char*>(&state.num_successors), sizeof(state.num_successors));
+        out.write(reinterpret_cast<const char*>(&state.winning_succs), sizeof(state.winning_succs));
+    }
+
+    // Write enum queue for resumable enumeration
+    uint64_t queue_size = enum_queue_.size();
+    out.write(reinterpret_cast<const char*>(&queue_size), sizeof(queue_size));
+    for (uint32_t id : enum_queue_) {
+        out.write(reinterpret_cast<const char*>(&id), sizeof(id));
+    }
+
+    out.close();
+    std::cerr << "Checkpoint saved: " << states_.size() << " states, phase " << phase_val << "\n";
+    return true;
+}
+
+bool RetrogradeSolver::load_checkpoint(const std::string& filename) {
+    std::ifstream in(filename, std::ios::binary);
+    if (!in) {
+        std::cerr << "Failed to open checkpoint file for reading: " << filename << "\n";
+        return false;
+    }
+
+    // Read and verify header
+    char magic[4];
+    in.read(magic, 4);
+    if (std::memcmp(magic, CHECKPOINT_MAGIC, 4) != 0) {
+        std::cerr << "Invalid checkpoint file (bad magic)\n";
+        return false;
+    }
+
+    uint32_t version;
+    in.read(reinterpret_cast<char*>(&version), sizeof(version));
+    if (version != CHECKPOINT_VERSION) {
+        std::cerr << "Unsupported checkpoint version: " << version << "\n";
+        return false;
+    }
+
+    // Read phase
+    uint32_t phase_val;
+    in.read(reinterpret_cast<char*>(&phase_val), sizeof(phase_val));
+    phase_ = static_cast<SolvePhase>(phase_val);
+
+    // Read statistics
+    in.read(reinterpret_cast<char*>(&num_wins_), sizeof(num_wins_));
+    in.read(reinterpret_cast<char*>(&num_losses_), sizeof(num_losses_));
+    in.read(reinterpret_cast<char*>(&num_draws_), sizeof(num_draws_));
+    in.read(reinterpret_cast<char*>(&start_id_), sizeof(start_id_));
+    in.read(reinterpret_cast<char*>(&enum_processed_), sizeof(enum_processed_));
+
+    // Read number of states
+    uint64_t num_states;
+    in.read(reinterpret_cast<char*>(&num_states), sizeof(num_states));
+
+    // Read states
+    states_.clear();
+    states_.reserve(num_states);
+    state_to_id_.clear();
+    state_to_id_.reserve(num_states);
+
+    for (uint64_t i = 0; i < num_states; ++i) {
+        StateInfo state;
+        in.read(reinterpret_cast<char*>(&state.packed), sizeof(state.packed));
+        uint8_t result_val;
+        in.read(reinterpret_cast<char*>(&result_val), sizeof(result_val));
+        state.result = static_cast<Result>(result_val);
+        in.read(reinterpret_cast<char*>(&state.num_successors), sizeof(state.num_successors));
+        in.read(reinterpret_cast<char*>(&state.winning_succs), sizeof(state.winning_succs));
+
+        state_to_id_[state.packed] = states_.size();
+        states_.push_back(state);
+    }
+
+    // Read enum queue
+    uint64_t queue_size;
+    in.read(reinterpret_cast<char*>(&queue_size), sizeof(queue_size));
+    enum_queue_.clear();
+    enum_queue_.reserve(queue_size);
+    for (uint64_t i = 0; i < queue_size; ++i) {
+        uint32_t id;
+        in.read(reinterpret_cast<char*>(&id), sizeof(id));
+        enum_queue_.push_back(id);
+    }
+
+    in.close();
+    std::cerr << "Checkpoint loaded: " << states_.size() << " states, phase " << phase_val
+              << ", queue size " << enum_queue_.size() << "\n";
+    return true;
 }
 
 } // namespace bobail

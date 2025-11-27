@@ -7,8 +7,19 @@
 #include <unordered_map>
 #include <unordered_set>
 #include <functional>
+#include <string>
 
 namespace bobail {
+
+// Phases of retrograde solving
+enum class SolvePhase {
+    NOT_STARTED = 0,
+    ENUMERATING = 1,
+    BUILDING_PREDECESSORS = 2,
+    MARKING_TERMINALS = 3,
+    PROPAGATING = 4,
+    COMPLETE = 5
+};
 
 // State info for retrograde analysis
 struct StateInfo {
@@ -49,6 +60,17 @@ public:
     // Get the result for the starting position
     Result starting_result() const;
 
+    // Checkpointing
+    bool save_checkpoint(const std::string& filename) const;
+    bool load_checkpoint(const std::string& filename);
+
+    // Set checkpoint interval (save every N states during enumeration)
+    void set_checkpoint_interval(uint64_t interval) { checkpoint_interval_ = interval; }
+    void set_checkpoint_file(const std::string& filename) { checkpoint_file_ = filename; }
+
+    // Get current phase
+    SolvePhase current_phase() const { return phase_; }
+
 private:
     // Phase 1: Enumerate all reachable states via BFS
     void enumerate_states();
@@ -81,6 +103,17 @@ private:
 
     // Starting state ID
     uint32_t start_id_ = 0;
+
+    // Current solve phase
+    SolvePhase phase_ = SolvePhase::NOT_STARTED;
+
+    // Checkpoint settings
+    uint64_t checkpoint_interval_ = 1000000;  // Save every 1M states
+    std::string checkpoint_file_;
+
+    // For resumable enumeration - queue state
+    std::vector<uint32_t> enum_queue_;
+    uint64_t enum_processed_ = 0;
 
     ProgressCallback progress_cb_;
 };
