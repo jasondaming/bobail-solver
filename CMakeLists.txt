@@ -9,8 +9,13 @@ set(CMAKE_EXPORT_COMPILE_COMMANDS ON)
 add_compile_options(-Wall -Wextra -Wpedantic)
 
 # Find dependencies
-find_package(RocksDB REQUIRED)
 find_package(GTest REQUIRED)
+
+# RocksDB via pkg-config (for storage layer - optional for now)
+find_package(PkgConfig)
+if(PkgConfig_FOUND)
+    pkg_check_modules(ROCKSDB rocksdb)
+endif()
 
 # Main library (engine code)
 add_library(bobail_engine
@@ -20,7 +25,11 @@ add_library(bobail_engine
     src/symmetry.cpp
 )
 target_include_directories(bobail_engine PUBLIC include)
-target_link_libraries(bobail_engine PUBLIC RocksDB::rocksdb)
+if(ROCKSDB_FOUND)
+    target_include_directories(bobail_engine PUBLIC ${ROCKSDB_INCLUDE_DIRS})
+    target_link_libraries(bobail_engine PUBLIC ${ROCKSDB_LIBRARIES})
+    target_compile_definitions(bobail_engine PUBLIC HAS_ROCKSDB)
+endif()
 
 # Main solver executable
 add_executable(bobail_solver src/main.cpp)

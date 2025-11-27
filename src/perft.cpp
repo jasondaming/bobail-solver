@@ -116,7 +116,7 @@ int main(int argc, char* argv[]) {
     std::cout << "\nUnique canonical positions:\n";
     for (int d = 0; d <= std::min(max_depth, 3); ++d) {
         std::unordered_set<uint64_t> seen;
-        uint64_t unique = unique_positions(start, d, seen);
+        unique_positions(start, d, seen);
         std::cout << "depth " << d << ": " << seen.size() << " unique positions\n";
     }
 
