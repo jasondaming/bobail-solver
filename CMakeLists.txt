@@ -25,6 +25,7 @@ add_library(bobail_engine
     src/symmetry.cpp
     src/tt.cpp
     src/pns.cpp
+    src/retrograde.cpp
 )
 target_include_directories(bobail_engine PUBLIC include)
 if(ROCKSDB_FOUND)
@@ -40,6 +41,10 @@ target_link_libraries(bobail_solver PRIVATE bobail_engine)
 # Perft validation tool
 add_executable(perft src/perft.cpp)
 target_link_libraries(perft PRIVATE bobail_engine)
+
+# Retrograde solver (strong solution)
+add_executable(retrograde_solve src/retrograde_main.cpp)
+target_link_libraries(retrograde_solve PRIVATE bobail_engine)
 
 # Tests
 enable_testing()
