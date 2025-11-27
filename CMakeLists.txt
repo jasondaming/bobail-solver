@@ -23,6 +23,8 @@ add_library(bobail_engine
     src/movegen.cpp
     src/hash.cpp
     src/symmetry.cpp
+    src/tt.cpp
+    src/pns.cpp
 )
 target_include_directories(bobail_engine PUBLIC include)
 if(ROCKSDB_FOUND)
