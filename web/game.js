@@ -261,29 +261,225 @@ function shouldAIMove() {
     return false;
 }
 
-// AI makes a move (random for now, will be replaced with solved database lookup)
+// ==================== AI with Alpha-Beta Search ====================
+
+// Evaluation function - returns score from White's perspective
+function evaluate(state) {
+    const bobailRow = Math.floor(state.bobailSquare / BOARD_SIZE);
+
+    // Terminal conditions
+    if (bobailRow === 0) return 10000; // White wins
+    if (bobailRow === BOARD_SIZE - 1) return -10000; // Black wins
+
+    // Check if bobail is trapped
+    const bobailMoves = getBobailMovesForState(state);
+    if (bobailMoves.length === 0) {
+        // Whoever's turn it is wins (they trapped the bobail)
+        return state.whiteToMove ? 10000 : -10000;
+    }
+
+    let score = 0;
+
+    // Bobail position - closer to opponent's home is better
+    // White wants bobail on row 4 (score negative for white perspective since black wins there)
+    // Actually: White wants bobail near row 0, Black wants near row 4
+    // From White's perspective: bobail near row 0 is good (positive)
+    score += (BOARD_SIZE - 1 - bobailRow) * 100; // Higher = bobail closer to White's home (row 0)
+
+    // Bobail mobility
+    score += bobailMoves.length * 10;
+
+    // Pawn positioning - control center and block opponent
+    for (const sq of state.whitePawns) {
+        const [r, c] = toRowCol(sq);
+        // Pawns closer to center columns are better
+        score += (2 - Math.abs(c - 2)) * 5;
+        // Pawns further from home row can push bobail
+        score += r * 3;
+    }
+
+    for (const sq of state.blackPawns) {
+        const [r, c] = toRowCol(sq);
+        score -= (2 - Math.abs(c - 2)) * 5;
+        score -= (BOARD_SIZE - 1 - r) * 3;
+    }
+
+    return score;
+}
+
+// Get bobail moves for a given state (not using global gameState)
+function getBobailMovesForState(state) {
+    const moves = [];
+    const [row, col] = toRowCol(state.bobailSquare);
+    const occupied = new Set([...state.whitePawns, ...state.blackPawns, state.bobailSquare]);
+
+    for (const [dr, dc] of DIRECTIONS) {
+        const newRow = row + dr;
+        const newCol = col + dc;
+        if (isValidSquare(newRow, newCol)) {
+            const newSq = toSquare(newRow, newCol);
+            if (!occupied.has(newSq)) {
+                moves.push(newSq);
+            }
+        }
+    }
+    return moves;
+}
+
+// Get pawn moves for a given state
+function getPawnMovesForState(state, sq) {
+    const moves = [];
+    const [row, col] = toRowCol(sq);
+    const occupied = new Set([...state.whitePawns, ...state.blackPawns, state.bobailSquare]);
+
+    for (const [dr, dc] of DIRECTIONS) {
+        let newRow = row + dr;
+        let newCol = col + dc;
+
+        while (isValidSquare(newRow, newCol)) {
+            const newSq = toSquare(newRow, newCol);
+            if (occupied.has(newSq)) break;
+            moves.push(newSq);
+            newRow += dr;
+            newCol += dc;
+        }
+    }
+    return moves;
+}
+
+// Generate all full moves (bobail + pawn) for a state
+function generateFullMoves(state) {
+    const moves = [];
+    const bobailMoves = getBobailMovesForState(state);
+
+    for (const bobailTo of bobailMoves) {
+        // Create state after bobail move
+        const afterBobail = {
+            ...state,
+            bobailSquare: bobailTo
+        };
+
+        const pawns = state.whiteToMove ? state.whitePawns : state.blackPawns;
+
+        for (let i = 0; i < pawns.length; i++) {
+            const pawnSq = pawns[i];
+            const pawnMoves = getPawnMovesForState(afterBobail, pawnSq);
+
+            for (const pawnTo of pawnMoves) {
+                moves.push({
+                    bobailFrom: state.bobailSquare,
+                    bobailTo: bobailTo,
+                    pawnFrom: pawnSq,
+                    pawnTo: pawnTo,
+                    pawnIndex: i
+                });
+            }
+        }
+    }
+
+    return moves;
+}
+
+// Apply a full move to a state and return new state
+function applyFullMove(state, move) {
+    const newWhitePawns = [...state.whitePawns];
+    const newBlackPawns = [...state.blackPawns];
+
+    if (state.whiteToMove) {
+        newWhitePawns[move.pawnIndex] = move.pawnTo;
+    } else {
+        newBlackPawns[move.pawnIndex] = move.pawnTo;
+    }
+
+    return {
+        whitePawns: newWhitePawns,
+        blackPawns: newBlackPawns,
+        bobailSquare: move.bobailTo,
+        whiteToMove: !state.whiteToMove
+    };
+}
+
+// Check if state is terminal
+function isTerminal(state) {
+    const bobailRow = Math.floor(state.bobailSquare / BOARD_SIZE);
+    if (bobailRow === 0 || bobailRow === BOARD_SIZE - 1) return true;
+    if (getBobailMovesForState(state).length === 0) return true;
+    return false;
+}
+
+// Alpha-beta search
+function alphaBeta(state, depth, alpha, beta, maximizing) {
+    if (depth === 0 || isTerminal(state)) {
+        return { score: evaluate(state), move: null };
+    }
+
+    const moves = generateFullMoves(state);
+    if (moves.length === 0) {
+        return { score: evaluate(state), move: null };
+    }
+
+    let bestMove = moves[0];
+
+    if (maximizing) {
+        let maxScore = -Infinity;
+        for (const move of moves) {
+            const newState = applyFullMove(state, move);
+            const result = alphaBeta(newState, depth - 1, alpha, beta, false);
+            if (result.score > maxScore) {
+                maxScore = result.score;
+                bestMove = move;
+            }
+            alpha = Math.max(alpha, result.score);
+            if (beta <= alpha) break;
+        }
+        return { score: maxScore, move: bestMove };
+    } else {
+        let minScore = Infinity;
+        for (const move of moves) {
+            const newState = applyFullMove(state, move);
+            const result = alphaBeta(newState, depth - 1, alpha, beta, true);
+            if (result.score < minScore) {
+                minScore = result.score;
+                bestMove = move;
+            }
+            beta = Math.min(beta, result.score);
+            if (beta <= alpha) break;
+        }
+        return { score: minScore, move: bestMove };
+    }
+}
+
+// AI makes a move using alpha-beta search
 function makeAIMove() {
     if (gameState.gameOver) return;
 
-    if (gameState.phase === 'bobail') {
-        const moves = getBobailMoves();
-        if (moves.length > 0) {
-            // For now, pick random move (later: use opening book)
-            const move = moves[Math.floor(Math.random() * moves.length)];
-            makeMove(move);
+    // Convert gameState to search state
+    const state = {
+        whitePawns: [...gameState.whitePawns],
+        blackPawns: [...gameState.blackPawns],
+        bobailSquare: gameState.bobailSquare,
+        whiteToMove: gameState.whiteToMove
+    };
+
+    // Search depth (3-4 is reasonable for responsiveness)
+    const depth = 3;
+    const maximizing = state.whiteToMove;
+
+    const result = alphaBeta(state, depth, -Infinity, Infinity, maximizing);
+
+    if (result.move) {
+        // Make bobail move
+        if (gameState.phase === 'bobail') {
+            makeMove(result.move.bobailTo);
         }
-    } else {
-        // AI pawn phase
-        const movablePawns = getMovablePawns();
-        if (movablePawns.length > 0) {
-            const pawnSq = movablePawns[Math.floor(Math.random() * movablePawns.length)];
-            const moves = getPawnMoves(pawnSq);
-            if (moves.length > 0) {
-                gameState.selectedSquare = pawnSq;
-                const move = moves[Math.floor(Math.random() * moves.length)];
-                makeMove(move);
+
+        // Make pawn move (after short delay for visual feedback)
+        setTimeout(() => {
+            if (gameState.phase === 'pawn' && !gameState.gameOver) {
+                gameState.selectedSquare = result.move.pawnFrom;
+                makeMove(result.move.pawnTo);
             }
-        }
+        }, 300);
     }
 }
 
