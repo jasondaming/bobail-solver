@@ -122,4 +122,62 @@ GameResult check_terminal(const State& s) {
     return GameResult::ONGOING;
 }
 
+// GameHistory implementation
+void GameHistory::push(const State& s) {
+    push(pack_state(s));
+}
+
+void GameHistory::push(uint64_t packed_state) {
+    history_.push_back(packed_state);
+}
+
+void GameHistory::pop() {
+    if (!history_.empty()) {
+        history_.pop_back();
+    }
+}
+
+bool GameHistory::is_threefold_repetition(const State& s) const {
+    return is_threefold_repetition(pack_state(s));
+}
+
+bool GameHistory::is_threefold_repetition(uint64_t packed_state) const {
+    // Count occurrences in history
+    // If it already appears 2+ times, adding it again makes 3-fold
+    return count(packed_state) >= 2;
+}
+
+int GameHistory::count(const State& s) const {
+    return count(pack_state(s));
+}
+
+int GameHistory::count(uint64_t packed_state) const {
+    int cnt = 0;
+    for (uint64_t h : history_) {
+        if (h == packed_state) {
+            ++cnt;
+        }
+    }
+    return cnt;
+}
+
+void GameHistory::clear() {
+    history_.clear();
+}
+
+GameResult check_terminal_with_history(const State& s, const GameHistory& history) {
+    // First check standard terminal conditions
+    GameResult result = check_terminal(s);
+    if (result != GameResult::ONGOING) {
+        return result;
+    }
+
+    // Check for 3-fold repetition
+    if (history.is_threefold_repetition(s)) {
+        return GameResult::DRAW;
+    }
+
+    return GameResult::ONGOING;
+}
+
 } // namespace bobail

@@ -3,6 +3,7 @@
 #include <cstdint>
 #include <string>
 #include <array>
+#include <vector>
 
 namespace bobail {
 
@@ -69,9 +70,44 @@ State unpack_state(uint64_t packed);
 enum class GameResult {
     ONGOING,
     WHITE_WINS,
-    BLACK_WINS
+    BLACK_WINS,
+    DRAW
 };
 
 GameResult check_terminal(const State& s);
+
+// Game history for tracking repetitions
+class GameHistory {
+public:
+    GameHistory() = default;
+
+    // Add a position to history (call after each move)
+    void push(const State& s);
+    void push(uint64_t packed_state);
+
+    // Remove last position (for undoing moves)
+    void pop();
+
+    // Check if current position would be a 3-fold repetition
+    // Call BEFORE pushing the new position
+    bool is_threefold_repetition(const State& s) const;
+    bool is_threefold_repetition(uint64_t packed_state) const;
+
+    // Get count of how many times a position has occurred
+    int count(const State& s) const;
+    int count(uint64_t packed_state) const;
+
+    // Clear history
+    void clear();
+
+    // Get number of positions in history
+    size_t size() const { return history_.size(); }
+
+private:
+    std::vector<uint64_t> history_;
+};
+
+// Check terminal with repetition detection
+GameResult check_terminal_with_history(const State& s, const GameHistory& history);
 
 } // namespace bobail
