@@ -11,10 +11,22 @@ add_compile_options(-Wall -Wextra -Wpedantic)
 # Find dependencies
 find_package(GTest REQUIRED)
 
-# RocksDB via pkg-config (for storage layer - optional for now)
+# RocksDB - try pkg-config first, then direct library search
 find_package(PkgConfig)
 if(PkgConfig_FOUND)
     pkg_check_modules(ROCKSDB rocksdb)
+endif()
+
+# If pkg-config didn't find it, try direct search
+if(NOT ROCKSDB_FOUND)
+    find_library(ROCKSDB_LIB rocksdb)
+    find_path(ROCKSDB_INCLUDE rocksdb/db.h)
+    if(ROCKSDB_LIB AND ROCKSDB_INCLUDE)
+        set(ROCKSDB_FOUND TRUE)
+        set(ROCKSDB_LIBRARIES ${ROCKSDB_LIB})
+        set(ROCKSDB_INCLUDE_DIRS ${ROCKSDB_INCLUDE})
+        message(STATUS "Found RocksDB via direct search: ${ROCKSDB_LIB}")
+    endif()
 endif()
 
 # Main library (engine code)
@@ -45,6 +57,19 @@ target_link_libraries(perft PRIVATE bobail_engine)
 # Retrograde solver (strong solution)
 add_executable(retrograde_solve src/retrograde_main.cpp)
 target_link_libraries(retrograde_solve PRIVATE bobail_engine)
+
+# Disk-based retrograde solver (using RocksDB)
+if(ROCKSDB_FOUND)
+    add_executable(retrograde_db
+        src/retrograde_db.cpp
+        src/retrograde_db_main.cpp
+    )
+    target_include_directories(retrograde_db PRIVATE include ${ROCKSDB_INCLUDE_DIRS})
+    target_link_libraries(retrograde_db PRIVATE bobail_engine ${ROCKSDB_LIBRARIES})
+    message(STATUS "Building disk-based retrograde solver with RocksDB")
+else()
+    message(WARNING "RocksDB not found - disk-based retrograde solver will not be built")
+endif()
 
 # Tests
 enable_testing()
