@@ -6,6 +6,7 @@
 #include <iomanip>
 #include <fstream>
 #include <cstring>
+#include <algorithm>
 #include <rocksdb/write_batch.h>
 
 namespace bobail {
@@ -140,25 +141,42 @@ bool RetrogradeSolverDB::solve() {
         return false;
     }
 
+    bool use_parallel = (num_threads_ > 1);
+    if (use_parallel) {
+        std::cerr << "Using " << num_threads_ << " threads for parallel processing\n";
+    }
+
     // Resume from current phase or start fresh
     if (phase_ == SolvePhaseDB::NOT_STARTED || phase_ == SolvePhaseDB::ENUMERATING) {
         if (progress_cb_) progress_cb_("Enumerating states", 0, 0);
         phase_ = SolvePhaseDB::ENUMERATING;
-        enumerate_states();
+        if (use_parallel) {
+            enumerate_states_parallel();
+        } else {
+            enumerate_states();
+        }
         phase_ = SolvePhaseDB::BUILDING_PREDECESSORS;
         save_metadata();
     }
 
     if (phase_ == SolvePhaseDB::BUILDING_PREDECESSORS) {
         if (progress_cb_) progress_cb_("Building predecessors", 0, num_states_);
-        build_predecessors();
+        if (use_parallel) {
+            build_predecessors_parallel();
+        } else {
+            build_predecessors();
+        }
         phase_ = SolvePhaseDB::MARKING_TERMINALS;
         save_metadata();
     }
 
     if (phase_ == SolvePhaseDB::MARKING_TERMINALS) {
         if (progress_cb_) progress_cb_("Marking terminals", 0, num_states_);
-        mark_terminals();
+        if (use_parallel) {
+            mark_terminals_parallel();
+        } else {
+            mark_terminals();
+        }
         phase_ = SolvePhaseDB::PROPAGATING;
         save_metadata();
     }
@@ -382,6 +400,212 @@ void RetrogradeSolverDB::enumerate_states() {
     }
 }
 
+// Parallel enumeration using batch processing
+void RetrogradeSolverDB::enumerate_states_parallel() {
+    // Check if resuming
+    if (queue_tail_ == 0 && queue_head_ == 0 && num_states_ == 0) {
+        // Fresh start
+        State start = State::starting_position();
+        auto [canonical_start, _] = canonicalize(start);
+        uint64_t start_packed = pack_state(canonical_start);
+
+        start_id_ = get_or_create_state(start_packed);
+
+        // Add to queue
+        std::string queue_key(reinterpret_cast<char*>(&queue_tail_), sizeof(queue_tail_));
+        std::string queue_val(reinterpret_cast<char*>(&start_id_), sizeof(start_id_));
+        db_->Put(rocksdb::WriteOptions(), cf_queue_, queue_key, queue_val);
+        queue_tail_++;
+        enum_processed_ = 0;
+    }
+
+    if (progress_cb_ && queue_head_ > 0) {
+        progress_cb_("Resuming parallel enumeration", enum_processed_, num_states_);
+    }
+
+    atomic_enum_processed_ = enum_processed_;
+    atomic_num_states_ = num_states_;
+    stop_workers_ = false;
+
+    // Process queue in batches
+    const size_t BATCH_SIZE = 10000;  // Load this many items from disk queue at a time
+
+    while (queue_head_ < queue_tail_) {
+        // Load a batch of work items into memory
+        work_queue_.clear();
+        work_queue_head_ = 0;
+
+        size_t batch_end = std::min(queue_head_ + BATCH_SIZE, queue_tail_);
+        for (uint64_t i = queue_head_; i < batch_end; ++i) {
+            std::string queue_key(reinterpret_cast<char*>(&i), sizeof(i));
+            std::string queue_val;
+
+            if (db_->Get(rocksdb::ReadOptions(), cf_queue_, queue_key, &queue_val).ok()) {
+                uint32_t id;
+                std::memcpy(&id, queue_val.data(), sizeof(id));
+                work_queue_.push_back(id);
+            }
+            // Delete from disk queue
+            db_->Delete(rocksdb::WriteOptions(), cf_queue_, queue_key);
+        }
+        queue_head_ = batch_end;
+
+        if (work_queue_.empty()) break;
+
+        // Structures for collecting new states from all threads
+        std::vector<std::vector<std::pair<uint64_t, uint32_t>>> thread_new_states(num_threads_);
+        std::vector<std::vector<std::pair<uint32_t, StateInfoCompact>>> thread_updates(num_threads_);
+
+        // Process work items in parallel
+        std::vector<std::thread> workers;
+        for (int t = 0; t < num_threads_; ++t) {
+            workers.emplace_back([this, t, &thread_new_states, &thread_updates]() {
+                auto& new_states = thread_new_states[t];
+                auto& updates = thread_updates[t];
+
+                while (true) {
+                    // Grab next work item
+                    size_t idx = work_queue_head_.fetch_add(1);
+                    if (idx >= work_queue_.size()) break;
+
+                    uint32_t id = work_queue_[idx];
+
+                    // Get state info
+                    StateInfoCompact info;
+                    {
+                        std::lock_guard<std::mutex> lock(db_mutex_);
+                        if (!get_state_info(id, info)) continue;
+                    }
+
+                    State s = unpack_state(info.packed);
+
+                    // Check if terminal
+                    GameResult gr = check_terminal(s);
+                    if (gr != GameResult::ONGOING) {
+                        info.num_successors = 0;
+                        updates.push_back({id, info});
+                        atomic_enum_processed_++;
+                        continue;
+                    }
+
+                    // Generate all moves
+                    auto moves = generate_moves(s);
+                    info.num_successors = moves.size();
+                    updates.push_back({id, info});
+
+                    if (moves.empty()) {
+                        atomic_enum_processed_++;
+                        continue;
+                    }
+
+                    // Process each successor
+                    for (const auto& move : moves) {
+                        State ns = apply_move(s, move);
+                        auto [canonical_ns, __] = canonicalize(ns);
+                        uint64_t ns_packed = pack_state(canonical_ns);
+
+                        // Check if already exists (read-only check first)
+                        int64_t existing_id;
+                        {
+                            std::lock_guard<std::mutex> lock(db_mutex_);
+                            existing_id = get_state_id(ns_packed);
+                        }
+
+                        if (existing_id < 0) {
+                            // Mark for creation with a placeholder
+                            // Use atomic counter for new ID
+                            uint32_t new_id = atomic_num_states_.fetch_add(1);
+                            new_states.push_back({ns_packed, new_id});
+                        }
+                    }
+
+                    atomic_enum_processed_++;
+                }
+            });
+        }
+
+        // Wait for all workers to complete
+        for (auto& w : workers) {
+            w.join();
+        }
+
+        // Merge results - state updates
+        rocksdb::WriteBatch batch;
+        for (const auto& updates : thread_updates) {
+            for (const auto& [id, info] : updates) {
+                uint32_t id_copy = id;
+                std::string id_key(reinterpret_cast<char*>(&id_copy), sizeof(id_copy));
+                std::string info_val(reinterpret_cast<const char*>(&info), sizeof(info));
+                batch.Put(cf_states_, id_key, info_val);
+            }
+        }
+
+        // Merge new states - deduplicate and create
+        std::vector<std::pair<uint64_t, uint32_t>> all_new_states;
+        for (auto& new_states : thread_new_states) {
+            all_new_states.insert(all_new_states.end(), new_states.begin(), new_states.end());
+        }
+
+        // Sort by packed value to deduplicate
+        std::sort(all_new_states.begin(), all_new_states.end());
+
+        uint32_t actual_new_count = 0;
+        for (size_t i = 0; i < all_new_states.size(); ++i) {
+            uint64_t packed = all_new_states[i].first;
+
+            // Skip duplicates
+            if (i > 0 && all_new_states[i - 1].first == packed) continue;
+
+            // Check if already exists in DB
+            int64_t existing = get_state_id(packed);
+            if (existing >= 0) continue;
+
+            // Create the state
+            uint32_t id = num_states_ + actual_new_count;
+            actual_new_count++;
+
+            StateInfoCompact info;
+            info.packed = packed;
+            info.result = static_cast<uint8_t>(Result::UNKNOWN);
+            info.num_successors = 0;
+            info.winning_succs = 0;
+
+            std::string id_key(reinterpret_cast<char*>(&id), sizeof(id));
+            std::string info_val(reinterpret_cast<char*>(&info), sizeof(info));
+            std::string packed_key(reinterpret_cast<char*>(&packed), sizeof(packed));
+            std::string id_val(reinterpret_cast<char*>(&id), sizeof(id));
+
+            batch.Put(cf_states_, id_key, info_val);
+            batch.Put(cf_packed_to_id_, packed_key, id_val);
+
+            // Add to queue for future processing
+            std::string queue_key(reinterpret_cast<char*>(&queue_tail_), sizeof(queue_tail_));
+            std::string queue_val(reinterpret_cast<char*>(&id), sizeof(id));
+            batch.Put(cf_queue_, queue_key, queue_val);
+            queue_tail_++;
+        }
+
+        num_states_ += actual_new_count;
+        db_->Write(rocksdb::WriteOptions(), &batch);
+
+        enum_processed_ = atomic_enum_processed_;
+
+        if (progress_cb_ && enum_processed_ % 100000 < BATCH_SIZE) {
+            progress_cb_("Parallel enumeration", enum_processed_, num_states_);
+        }
+
+        // Checkpoint periodically
+        if (checkpoint_interval_ > 0 && enum_processed_ % checkpoint_interval_ < BATCH_SIZE) {
+            save_metadata();
+            std::cerr << "Checkpoint saved: " << num_states_ << " states, phase 1 (parallel)\n";
+        }
+    }
+
+    if (progress_cb_) {
+        progress_cb_("Enumeration complete", num_states_, num_states_);
+    }
+}
+
 void RetrogradeSolverDB::build_predecessors() {
     rocksdb::WriteBatch batch;
     int batch_count = 0;
@@ -438,6 +662,92 @@ void RetrogradeSolverDB::build_predecessors() {
     }
 }
 
+void RetrogradeSolverDB::build_predecessors_parallel() {
+    atomic_enum_processed_ = 0;
+    const uint64_t CHUNK_SIZE = 10000;
+
+    std::vector<std::thread> workers;
+    for (int t = 0; t < num_threads_; ++t) {
+        workers.emplace_back([this, t, CHUNK_SIZE]() {
+            while (true) {
+                // Grab next chunk
+                uint64_t chunk_start = atomic_enum_processed_.fetch_add(CHUNK_SIZE);
+                if (chunk_start >= num_states_) break;
+
+                uint64_t chunk_end = std::min(chunk_start + CHUNK_SIZE, num_states_);
+
+                // Collect all predecessor relations for this chunk
+                std::vector<std::pair<uint32_t, uint32_t>> pred_relations; // (succ_id, pred_id)
+
+                for (uint64_t id = chunk_start; id < chunk_end; ++id) {
+                    StateInfoCompact info;
+                    {
+                        std::lock_guard<std::mutex> lock(db_mutex_);
+                        if (!get_state_info(id, info)) continue;
+                    }
+
+                    State s = unpack_state(info.packed);
+
+                    // Skip terminals
+                    if (check_terminal(s) != GameResult::ONGOING) {
+                        continue;
+                    }
+
+                    auto moves = generate_moves(s);
+                    if (moves.empty()) continue;
+
+                    for (const auto& move : moves) {
+                        State ns = apply_move(s, move);
+                        auto [canonical_ns, _] = canonicalize(ns);
+                        uint64_t ns_packed = pack_state(canonical_ns);
+
+                        int64_t succ_id;
+                        {
+                            std::lock_guard<std::mutex> lock(db_mutex_);
+                            succ_id = get_state_id(ns_packed);
+                        }
+
+                        if (succ_id >= 0) {
+                            pred_relations.push_back({static_cast<uint32_t>(succ_id), static_cast<uint32_t>(id)});
+                        }
+                    }
+                }
+
+                // Write predecessor relations under lock
+                {
+                    std::lock_guard<std::mutex> lock(db_mutex_);
+                    for (const auto& [succ_id, pred_id] : pred_relations) {
+                        std::string key(reinterpret_cast<const char*>(&succ_id), sizeof(uint32_t));
+                        std::string existing;
+                        db_->Get(rocksdb::ReadOptions(), cf_predecessors_, key, &existing);
+                        existing.append(reinterpret_cast<const char*>(&pred_id), sizeof(pred_id));
+                        db_->Put(rocksdb::WriteOptions(), cf_predecessors_, key, existing);
+                    }
+                }
+            }
+        });
+    }
+
+    // Progress monitoring in main thread
+    while (true) {
+        uint64_t processed = atomic_enum_processed_;
+        if (processed >= num_states_) break;
+
+        if (progress_cb_) {
+            progress_cb_("Building predecessors (parallel)", processed, num_states_);
+        }
+        std::this_thread::sleep_for(std::chrono::seconds(1));
+    }
+
+    for (auto& w : workers) {
+        w.join();
+    }
+
+    if (progress_cb_) {
+        progress_cb_("Predecessors complete", num_states_, num_states_);
+    }
+}
+
 void RetrogradeSolverDB::mark_terminals() {
     for (uint32_t id = 0; id < num_states_; ++id) {
         StateInfoCompact info;
@@ -483,6 +793,108 @@ void RetrogradeSolverDB::mark_terminals() {
             progress_cb_("Marking terminals", id, num_states_);
         }
     }
+
+    if (progress_cb_) {
+        progress_cb_("Terminals marked", num_states_, num_states_);
+    }
+}
+
+void RetrogradeSolverDB::mark_terminals_parallel() {
+    atomic_enum_processed_ = 0;
+    std::atomic<uint64_t> atomic_wins{0};
+    std::atomic<uint64_t> atomic_losses{0};
+    const uint64_t CHUNK_SIZE = 10000;
+
+    std::vector<std::thread> workers;
+    for (int t = 0; t < num_threads_; ++t) {
+        workers.emplace_back([this, &atomic_wins, &atomic_losses, CHUNK_SIZE]() {
+            uint64_t local_wins = 0;
+            uint64_t local_losses = 0;
+
+            while (true) {
+                // Grab next chunk
+                uint64_t chunk_start = atomic_enum_processed_.fetch_add(CHUNK_SIZE);
+                if (chunk_start >= num_states_) break;
+
+                uint64_t chunk_end = std::min(chunk_start + CHUNK_SIZE, num_states_);
+
+                std::vector<std::pair<uint32_t, StateInfoCompact>> updates;
+
+                for (uint64_t id = chunk_start; id < chunk_end; ++id) {
+                    StateInfoCompact info;
+                    {
+                        std::lock_guard<std::mutex> lock(db_mutex_);
+                        if (!get_state_info(id, info)) continue;
+                    }
+
+                    State s = unpack_state(info.packed);
+                    GameResult gr = check_terminal(s);
+
+                    bool changed = false;
+
+                    if (gr == GameResult::WHITE_WINS) {
+                        if (s.white_to_move) {
+                            info.result = static_cast<uint8_t>(Result::WIN);
+                            local_wins++;
+                        } else {
+                            info.result = static_cast<uint8_t>(Result::LOSS);
+                            local_losses++;
+                        }
+                        changed = true;
+                    } else if (gr == GameResult::BLACK_WINS) {
+                        if (!s.white_to_move) {
+                            info.result = static_cast<uint8_t>(Result::WIN);
+                            local_wins++;
+                        } else {
+                            info.result = static_cast<uint8_t>(Result::LOSS);
+                            local_losses++;
+                        }
+                        changed = true;
+                    } else if (info.num_successors == 0) {
+                        auto moves = generate_moves(s);
+                        if (moves.empty()) {
+                            info.result = static_cast<uint8_t>(Result::LOSS);
+                            local_losses++;
+                            changed = true;
+                        }
+                    }
+
+                    if (changed) {
+                        updates.push_back({static_cast<uint32_t>(id), info});
+                    }
+                }
+
+                // Write updates under lock
+                {
+                    std::lock_guard<std::mutex> lock(db_mutex_);
+                    for (const auto& [id, info] : updates) {
+                        put_state_info(id, info);
+                    }
+                }
+            }
+
+            atomic_wins += local_wins;
+            atomic_losses += local_losses;
+        });
+    }
+
+    // Progress monitoring in main thread
+    while (true) {
+        uint64_t processed = atomic_enum_processed_;
+        if (processed >= num_states_) break;
+
+        if (progress_cb_) {
+            progress_cb_("Marking terminals (parallel)", processed, num_states_);
+        }
+        std::this_thread::sleep_for(std::chrono::seconds(1));
+    }
+
+    for (auto& w : workers) {
+        w.join();
+    }
+
+    num_wins_ = atomic_wins;
+    num_losses_ = atomic_losses;
 
     if (progress_cb_) {
         progress_cb_("Terminals marked", num_states_, num_states_);

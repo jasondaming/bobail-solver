@@ -15,6 +15,7 @@ void print_usage(const char* prog) {
               << "  --db PATH           Database directory (required)\n"
               << "  --import FILE       Import from old checkpoint file\n"
               << "  --interval N        Save checkpoint every N states (default: 1000000)\n"
+              << "  --threads N         Number of threads for parallel processing (default: 1)\n"
               << "  --help              Show this help\n";
 }
 
@@ -22,6 +23,7 @@ int main(int argc, char* argv[]) {
     std::string db_path;
     std::string import_file;
     uint64_t checkpoint_interval = 1000000;
+    int num_threads = 1;
 
     // Parse arguments
     for (int i = 1; i < argc; ++i) {
@@ -47,6 +49,14 @@ int main(int argc, char* argv[]) {
                 checkpoint_interval = std::stoull(argv[++i]);
             } else {
                 std::cerr << "Error: --interval requires a number\n";
+                return 1;
+            }
+        } else if (std::strcmp(argv[i], "--threads") == 0) {
+            if (i + 1 < argc) {
+                num_threads = std::stoi(argv[++i]);
+                if (num_threads < 1) num_threads = 1;
+            } else {
+                std::cerr << "Error: --threads requires a number\n";
                 return 1;
             }
         } else {
@@ -95,9 +105,11 @@ int main(int argc, char* argv[]) {
     }
 
     std::cout << "Current phase: " << static_cast<int>(solver.current_phase()) << "\n";
-    std::cout << "States in database: " << solver.num_states() << "\n\n";
+    std::cout << "States in database: " << solver.num_states() << "\n";
+    std::cout << "Threads: " << num_threads << "\n\n";
 
     solver.set_checkpoint_interval(checkpoint_interval);
+    solver.set_num_threads(num_threads);
 
     // Progress callback
     solver.set_progress_callback([](const char* phase, uint64_t current, uint64_t total) {

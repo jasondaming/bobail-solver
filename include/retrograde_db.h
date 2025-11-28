@@ -6,6 +6,12 @@
 #include <functional>
 #include <string>
 #include <memory>
+#include <mutex>
+#include <atomic>
+#include <thread>
+#include <vector>
+#include <queue>
+#include <condition_variable>
 #include <rocksdb/db.h>
 #include <rocksdb/options.h>
 
@@ -68,18 +74,25 @@ public:
     // Get current phase
     SolvePhaseDB current_phase() const { return phase_; }
 
+    // Set number of threads for parallel processing
+    void set_num_threads(int num_threads) { num_threads_ = num_threads; }
+
     // Import from old checkpoint format
     bool import_checkpoint(const std::string& checkpoint_file);
 
 private:
-    // Phase 1: Enumerate all reachable states via BFS
+    // Phase 1: Enumerate all reachable states via BFS (parallel version)
     void enumerate_states();
+    void enumerate_states_parallel();
+    void enumeration_worker(int thread_id);
 
     // Phase 2: Build predecessor graph (stored in separate column family)
     void build_predecessors();
+    void build_predecessors_parallel();
 
     // Phase 3: Mark terminal states
     void mark_terminals();
+    void mark_terminals_parallel();
 
     // Phase 4: Retrograde propagation
     void propagate();
@@ -135,6 +148,24 @@ private:
     uint64_t queue_tail_ = 0;
 
     ProgressCallback progress_cb_;
+
+    // Parallelization settings
+    int num_threads_ = 1;
+
+    // Thread synchronization for parallel enumeration
+    std::mutex db_mutex_;                    // Protects database writes
+    std::mutex queue_mutex_;                 // Protects in-memory queue
+    std::atomic<uint64_t> atomic_enum_processed_{0};
+    std::atomic<uint64_t> atomic_num_states_{0};
+    std::atomic<bool> stop_workers_{false};
+
+    // In-memory work queue for parallel processing
+    std::vector<uint32_t> work_queue_;
+    std::atomic<size_t> work_queue_head_{0};
+    std::condition_variable work_cv_;
+
+    // Thread-safe state creation with concurrent hash map
+    std::mutex state_create_mutex_;
 };
 
 } // namespace bobail
