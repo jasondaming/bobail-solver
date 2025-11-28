@@ -263,8 +263,9 @@ function animateMove(fromSq, toSq, pieceType, callback) {
     const animPiece = piece.cloneNode(true);
     animPiece.classList.add('animating');
     animPiece.style.position = 'absolute';
-    animPiece.style.left = (fromRect.left - boardRect.left + fromRect.width / 2 - 27) + 'px';
-    animPiece.style.top = (fromRect.top - boardRect.top + fromRect.height / 2 - 27) + 'px';
+    const pieceSize = piece.offsetWidth / 2;
+    animPiece.style.left = (fromRect.left - boardRect.left + fromRect.width / 2 - pieceSize) + 'px';
+    animPiece.style.top = (fromRect.top - boardRect.top + fromRect.height / 2 - pieceSize) + 'px';
     animPiece.style.zIndex = '100';
     animPiece.style.transition = 'left 0.25s ease, top 0.25s ease';
 
@@ -276,8 +277,8 @@ function animateMove(fromSq, toSq, pieceType, callback) {
 
     // Trigger animation
     requestAnimationFrame(() => {
-        animPiece.style.left = (toRect.left - boardRect.left + toRect.width / 2 - 27) + 'px';
-        animPiece.style.top = (toRect.top - boardRect.top + toRect.height / 2 - 27) + 'px';
+        animPiece.style.left = (toRect.left - boardRect.left + toRect.width / 2 - pieceSize) + 'px';
+        animPiece.style.top = (toRect.top - boardRect.top + toRect.height / 2 - pieceSize) + 'px';
     });
 
     // Clean up after animation
