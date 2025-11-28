@@ -15,6 +15,28 @@ const DIRECTIONS = [
     [1, -1]   // SW
 ];
 
+// Difficulty settings (search depth)
+const DIFFICULTY = {
+    easy: 1,
+    medium: 3,
+    hard: 5
+};
+
+// Stats tracking
+let stats = {
+    wins: 0,
+    losses: 0,
+    draws: 0
+};
+
+// Sound effects
+const sounds = {
+    move: null,
+    capture: null,
+    gameOver: null,
+    enabled: true
+};
+
 // Game state
 let gameState = {
     whitePawns: [],      // Array of square indices
@@ -28,8 +50,58 @@ let gameState = {
     hintsEnabled: false,
     playerColor: 'white', // 'white', 'black', or 'both'
     gameOver: false,
-    winner: null
+    winner: null,
+    difficulty: 'medium',
+    animating: false
 };
+
+// Load stats from localStorage
+function loadStats() {
+    const saved = localStorage.getItem('bobail-stats');
+    if (saved) {
+        stats = JSON.parse(saved);
+    }
+}
+
+// Save stats to localStorage
+function saveStats() {
+    localStorage.setItem('bobail-stats', JSON.stringify(stats));
+}
+
+// Initialize sound effects
+function initSounds() {
+    // Create audio context for generating sounds
+    try {
+        const AudioContext = window.AudioContext || window.webkitAudioContext;
+        const audioCtx = new AudioContext();
+
+        sounds.play = (type) => {
+            if (!sounds.enabled) return;
+
+            const oscillator = audioCtx.createOscillator();
+            const gainNode = audioCtx.createGain();
+
+            oscillator.connect(gainNode);
+            gainNode.connect(audioCtx.destination);
+
+            if (type === 'move') {
+                oscillator.frequency.value = 440;
+                gainNode.gain.setValueAtTime(0.1, audioCtx.currentTime);
+                gainNode.gain.exponentialRampToValueAtTime(0.01, audioCtx.currentTime + 0.1);
+                oscillator.start(audioCtx.currentTime);
+                oscillator.stop(audioCtx.currentTime + 0.1);
+            } else if (type === 'gameOver') {
+                oscillator.frequency.value = 523.25;
+                gainNode.gain.setValueAtTime(0.2, audioCtx.currentTime);
+                gainNode.gain.exponentialRampToValueAtTime(0.01, audioCtx.currentTime + 0.5);
+                oscillator.start(audioCtx.currentTime);
+                oscillator.stop(audioCtx.currentTime + 0.5);
+            }
+        };
+    } catch (e) {
+        sounds.play = () => {}; // No-op if audio not available
+    }
+}
 
 // Initialize starting position
 function initGame() {
@@ -45,10 +117,13 @@ function initGame() {
         hintsEnabled: gameState.hintsEnabled,
         playerColor: gameState.playerColor,
         gameOver: false,
-        winner: null
+        winner: null,
+        difficulty: gameState.difficulty,
+        animating: false
     };
     renderBoard();
     updateUI();
+    updateStatsDisplay();
 }
 
 // Convert between row/col and square index
@@ -159,55 +234,145 @@ function checkGameOver() {
     return { over: false, winner: null };
 }
 
+// Animate a piece moving from one square to another
+function animateMove(fromSq, toSq, pieceType, callback) {
+    const board = document.getElementById('board');
+    const squares = board.querySelectorAll('.square');
+    const fromEl = squares[fromSq];
+    const toEl = squares[toSq];
+
+    if (!fromEl || !toEl) {
+        callback();
+        return;
+    }
+
+    const piece = fromEl.querySelector('.piece');
+    if (!piece) {
+        callback();
+        return;
+    }
+
+    gameState.animating = true;
+
+    // Get positions
+    const fromRect = fromEl.getBoundingClientRect();
+    const toRect = toEl.getBoundingClientRect();
+    const boardRect = board.getBoundingClientRect();
+
+    // Create animated piece
+    const animPiece = piece.cloneNode(true);
+    animPiece.classList.add('animating');
+    animPiece.style.position = 'absolute';
+    animPiece.style.left = (fromRect.left - boardRect.left + fromRect.width / 2 - 27) + 'px';
+    animPiece.style.top = (fromRect.top - boardRect.top + fromRect.height / 2 - 27) + 'px';
+    animPiece.style.zIndex = '100';
+    animPiece.style.transition = 'left 0.25s ease, top 0.25s ease';
+
+    // Hide original piece
+    piece.style.opacity = '0';
+
+    board.style.position = 'relative';
+    board.appendChild(animPiece);
+
+    // Trigger animation
+    requestAnimationFrame(() => {
+        animPiece.style.left = (toRect.left - boardRect.left + toRect.width / 2 - 27) + 'px';
+        animPiece.style.top = (toRect.top - boardRect.top + toRect.height / 2 - 27) + 'px';
+    });
+
+    // Clean up after animation
+    setTimeout(() => {
+        animPiece.remove();
+        gameState.animating = false;
+        if (sounds.play) sounds.play('move');
+        callback();
+    }, 260);
+}
+
 // Make a move
-function makeMove(toSquare) {
-    if (gameState.phase === 'bobail') {
-        // Move bobail
-        const fromSquare = gameState.bobailSquare;
-        gameState.bobailSquare = toSquare;
-        gameState.moveHistory.push({
-            type: 'bobail',
-            from: fromSquare,
-            to: toSquare,
-            whiteToMove: gameState.whiteToMove
-        });
-        gameState.phase = 'pawn';
-        gameState.selectedSquare = null;
-        gameState.validMoves = [];
+function makeMove(toSquare, animate = true) {
+    const fromSquare = gameState.phase === 'bobail' ? gameState.bobailSquare : gameState.selectedSquare;
+    const pieceType = gameState.phase === 'bobail' ? 'bobail' : (gameState.whiteToMove ? 'white' : 'black');
+
+    const doMove = () => {
+        if (gameState.phase === 'bobail') {
+            // Move bobail
+            gameState.bobailSquare = toSquare;
+            gameState.moveHistory.push({
+                type: 'bobail',
+                from: fromSquare,
+                to: toSquare,
+                whiteToMove: gameState.whiteToMove
+            });
+            gameState.phase = 'pawn';
+            gameState.selectedSquare = null;
+            gameState.validMoves = [];
+        } else {
+            // Move pawn
+            const pawns = gameState.whiteToMove ? gameState.whitePawns : gameState.blackPawns;
+            const idx = pawns.indexOf(fromSquare);
+            pawns[idx] = toSquare;
+
+            gameState.moveHistory.push({
+                type: 'pawn',
+                from: fromSquare,
+                to: toSquare,
+                whiteToMove: gameState.whiteToMove
+            });
+
+            // End turn
+            gameState.whiteToMove = !gameState.whiteToMove;
+            gameState.phase = 'bobail';
+            gameState.selectedSquare = null;
+            gameState.validMoves = [];
+        }
+
+        // Check for game over
+        const result = checkGameOver();
+        if (result.over) {
+            gameState.gameOver = true;
+            gameState.winner = result.winner;
+            if (sounds.play) sounds.play('gameOver');
+            updateStats(result.winner);
+        }
+
+        renderBoard();
+        updateUI();
+
+        // AI move if needed
+        if (!gameState.gameOver && shouldAIMove()) {
+            setTimeout(makeAIMove, 400);
+        }
+    };
+
+    if (animate && !gameState.animating) {
+        animateMove(fromSquare, toSquare, pieceType, doMove);
     } else {
-        // Move pawn
-        const fromSquare = gameState.selectedSquare;
-        const pawns = gameState.whiteToMove ? gameState.whitePawns : gameState.blackPawns;
-        const idx = pawns.indexOf(fromSquare);
-        pawns[idx] = toSquare;
-
-        gameState.moveHistory.push({
-            type: 'pawn',
-            from: fromSquare,
-            to: toSquare,
-            whiteToMove: gameState.whiteToMove
-        });
-
-        // End turn
-        gameState.whiteToMove = !gameState.whiteToMove;
-        gameState.phase = 'bobail';
-        gameState.selectedSquare = null;
-        gameState.validMoves = [];
+        doMove();
     }
+}
 
-    // Check for game over
-    const result = checkGameOver();
-    if (result.over) {
-        gameState.gameOver = true;
-        gameState.winner = result.winner;
+// Update stats after game over
+function updateStats(winner) {
+    if (gameState.playerColor === 'both') return;
+
+    const playerWon = (gameState.playerColor === winner);
+    const playerLost = (gameState.playerColor !== winner);
+
+    if (playerWon) {
+        stats.wins++;
+    } else if (playerLost) {
+        stats.losses++;
     }
+    saveStats();
+    updateStatsDisplay();
+}
 
-    renderBoard();
-    updateUI();
-
-    // AI move if needed
-    if (!gameState.gameOver && shouldAIMove()) {
-        setTimeout(makeAIMove, 500);
+// Update stats display
+function updateStatsDisplay() {
+    const statsEl = document.getElementById('stats-display');
+    if (statsEl) {
+        statsEl.innerHTML = `<span class="stat-win">W: ${stats.wins}</span> | <span class="stat-loss">L: ${stats.losses}</span>`;
     }
 }
 
@@ -451,7 +616,7 @@ function alphaBeta(state, depth, alpha, beta, maximizing) {
 
 // AI makes a move using alpha-beta search
 function makeAIMove() {
-    if (gameState.gameOver) return;
+    if (gameState.gameOver || gameState.animating) return;
 
     // Convert gameState to search state
     const state = {
@@ -461,8 +626,8 @@ function makeAIMove() {
         whiteToMove: gameState.whiteToMove
     };
 
-    // Search depth (3-4 is reasonable for responsiveness)
-    const depth = 3;
+    // Search depth based on difficulty
+    const depth = DIFFICULTY[gameState.difficulty] || 3;
     const maximizing = state.whiteToMove;
 
     const result = alphaBeta(state, depth, -Infinity, Infinity, maximizing);
@@ -473,19 +638,20 @@ function makeAIMove() {
             makeMove(result.move.bobailTo);
         }
 
-        // Make pawn move (after short delay for visual feedback)
+        // Make pawn move (after animation completes)
         setTimeout(() => {
-            if (gameState.phase === 'pawn' && !gameState.gameOver) {
+            if (gameState.phase === 'pawn' && !gameState.gameOver && !gameState.animating) {
                 gameState.selectedSquare = result.move.pawnFrom;
                 makeMove(result.move.pawnTo);
             }
-        }, 300);
+        }, 350);
     }
 }
 
 // Handle square click
 function handleSquareClick(sq) {
     if (gameState.gameOver) return;
+    if (gameState.animating) return;
     if (shouldAIMove()) return; // Not player's turn
 
     const piece = getPieceAt(sq);
@@ -658,7 +824,10 @@ function showGameOverOverlay() {
             <div class="game-over-content">
                 <h2 id="game-over-title"></h2>
                 <p id="game-over-message"></p>
-                <button class="btn" onclick="hideGameOverOverlay(); initGame();">Play Again</button>
+                <div class="game-over-buttons">
+                    <button class="btn" onclick="hideGameOverOverlay(); initGame();">Play Again</button>
+                    <button class="btn btn-secondary" onclick="hideGameOverOverlay();">Review Game</button>
+                </div>
             </div>
         `;
         document.body.appendChild(overlay);
@@ -667,7 +836,19 @@ function showGameOverOverlay() {
     const title = document.getElementById('game-over-title');
     const message = document.getElementById('game-over-message');
 
-    title.textContent = `${gameState.winner === 'white' ? 'White' : 'Black'} Wins!`;
+    const isPlayerWin = gameState.playerColor !== 'both' && gameState.playerColor === gameState.winner;
+    const isPlayerLoss = gameState.playerColor !== 'both' && gameState.playerColor !== gameState.winner;
+
+    if (isPlayerWin) {
+        title.textContent = 'You Win!';
+        title.style.color = 'var(--win-color)';
+    } else if (isPlayerLoss) {
+        title.textContent = 'You Lose!';
+        title.style.color = 'var(--loss-color)';
+    } else {
+        title.textContent = `${gameState.winner === 'white' ? 'White' : 'Black'} Wins!`;
+        title.style.color = '';
+    }
 
     const bobailRow = Math.floor(gameState.bobailSquare / BOARD_SIZE);
     if (bobailRow === 0 || bobailRow === BOARD_SIZE - 1) {
@@ -686,10 +867,106 @@ function hideGameOverOverlay() {
     }
 }
 
+// ==================== URL Sharing ====================
+
+// Encode game state to a compact string
+function encodeGameState() {
+    const wp = gameState.whitePawns.map(s => s.toString(36)).join('');
+    const bp = gameState.blackPawns.map(s => s.toString(36)).join('');
+    const bob = gameState.bobailSquare.toString(36);
+    const turn = gameState.whiteToMove ? 'w' : 'b';
+    const phase = gameState.phase === 'bobail' ? 'B' : 'P';
+    return `${wp}-${bp}-${bob}${turn}${phase}`;
+}
+
+// Decode game state from URL parameter
+function decodeGameState(code) {
+    try {
+        const parts = code.split('-');
+        if (parts.length !== 3) return null;
+
+        const wp = parts[0].split('').map(c => parseInt(c, 36));
+        const bp = parts[1].split('').map(c => parseInt(c, 36));
+
+        const bobTurnPhase = parts[2];
+        const bob = parseInt(bobTurnPhase[0], 36);
+        const turn = bobTurnPhase[1] === 'w';
+        const phase = bobTurnPhase[2] === 'B' ? 'bobail' : 'pawn';
+
+        // Validate
+        if (wp.length !== 5 || bp.length !== 5) return null;
+        if (bob < 0 || bob >= 25) return null;
+
+        return {
+            whitePawns: wp,
+            blackPawns: bp,
+            bobailSquare: bob,
+            whiteToMove: turn,
+            phase: phase
+        };
+    } catch (e) {
+        return null;
+    }
+}
+
+// Share current position via URL
+function sharePosition() {
+    const code = encodeGameState();
+    const url = `${window.location.origin}${window.location.pathname}?pos=${code}`;
+
+    // Copy to clipboard
+    navigator.clipboard.writeText(url).then(() => {
+        showToast('Position URL copied to clipboard!');
+    }).catch(() => {
+        // Fallback - show URL
+        prompt('Copy this URL to share the position:', url);
+    });
+}
+
+// Load position from URL on page load
+function loadFromURL() {
+    const params = new URLSearchParams(window.location.search);
+    const pos = params.get('pos');
+    if (pos) {
+        const state = decodeGameState(pos);
+        if (state) {
+            gameState.whitePawns = state.whitePawns;
+            gameState.blackPawns = state.blackPawns;
+            gameState.bobailSquare = state.bobailSquare;
+            gameState.whiteToMove = state.whiteToMove;
+            gameState.phase = state.phase;
+            gameState.playerColor = 'both'; // Analysis mode for shared positions
+            renderBoard();
+            updateUI();
+            showToast('Position loaded from URL');
+        }
+    }
+}
+
+// Show toast notification
+function showToast(message) {
+    let toast = document.querySelector('.toast');
+    if (!toast) {
+        toast = document.createElement('div');
+        toast.className = 'toast';
+        document.body.appendChild(toast);
+    }
+    toast.textContent = message;
+    toast.classList.add('visible');
+    setTimeout(() => toast.classList.remove('visible'), 2000);
+}
+
 // Event listeners
 document.addEventListener('DOMContentLoaded', () => {
+    // Load saved stats and initialize sounds
+    loadStats();
+    initSounds();
+
     // Initialize game
     initGame();
+
+    // Load position from URL if present
+    loadFromURL();
 
     // Hint toggle
     document.getElementById('hint-toggle').addEventListener('click', (e) => {
@@ -716,4 +993,81 @@ document.addEventListener('DOMContentLoaded', () => {
         gameState.playerColor = e.target.value;
         initGame();
     });
+
+    // Difficulty select
+    const difficultySelect = document.getElementById('difficulty');
+    if (difficultySelect) {
+        difficultySelect.addEventListener('change', (e) => {
+            gameState.difficulty = e.target.value;
+        });
+    }
+
+    // Sound toggle
+    const soundToggle = document.getElementById('sound-toggle');
+    if (soundToggle) {
+        soundToggle.addEventListener('click', (e) => {
+            sounds.enabled = !sounds.enabled;
+            e.target.classList.toggle('active', sounds.enabled);
+            e.target.textContent = sounds.enabled ? '🔊' : '🔇';
+        });
+    }
+
+    // Share button
+    const shareBtn = document.getElementById('share-btn');
+    if (shareBtn) {
+        shareBtn.addEventListener('click', sharePosition);
+    }
+
+    // Reset stats button
+    const resetStatsBtn = document.getElementById('reset-stats');
+    if (resetStatsBtn) {
+        resetStatsBtn.addEventListener('click', () => {
+            stats = { wins: 0, losses: 0, draws: 0 };
+            saveStats();
+            updateStatsDisplay();
+            showToast('Stats reset');
+        });
+    }
+
+    // Keyboard controls
+    document.addEventListener('keydown', (e) => {
+        if (gameState.gameOver || gameState.animating || shouldAIMove()) return;
+
+        // Arrow keys for navigation
+        if (e.key === 'Escape') {
+            gameState.selectedSquare = null;
+            gameState.validMoves = [];
+            renderBoard();
+        } else if (e.key === 'z' && (e.ctrlKey || e.metaKey)) {
+            e.preventDefault();
+            undoMove();
+        } else if (e.key === 'n' && (e.ctrlKey || e.metaKey)) {
+            e.preventDefault();
+            hideGameOverOverlay();
+            initGame();
+        }
+    });
+
+    // Touch handling for mobile
+    let touchStartX = 0;
+    let touchStartY = 0;
+
+    document.getElementById('board').addEventListener('touchstart', (e) => {
+        touchStartX = e.touches[0].clientX;
+        touchStartY = e.touches[0].clientY;
+    }, { passive: true });
+
+    document.getElementById('board').addEventListener('touchend', (e) => {
+        const touchEndX = e.changedTouches[0].clientX;
+        const touchEndY = e.changedTouches[0].clientY;
+
+        // Only register as click if not a swipe
+        const dx = Math.abs(touchEndX - touchStartX);
+        const dy = Math.abs(touchEndY - touchStartY);
+
+        if (dx < 10 && dy < 10) {
+            // It's a tap, let the click handler deal with it
+            return;
+        }
+    }, { passive: true });
 });

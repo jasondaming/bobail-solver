@@ -38,15 +38,33 @@
                         </button>
                         <button id="new-game" class="btn">New Game</button>
                         <button id="undo" class="btn">Undo</button>
+                        <button id="share-btn" class="btn">Share</button>
+                        <button id="sound-toggle" class="btn btn-icon active">🔊</button>
                     </div>
 
-                    <div class="mode-select">
-                        <label>Play as:</label>
-                        <select id="player-color">
-                            <option value="white">White (First)</option>
-                            <option value="black">Black (Second)</option>
-                            <option value="both">Both (Analysis)</option>
-                        </select>
+                    <div class="selects-row">
+                        <div class="mode-select">
+                            <label>Play as:</label>
+                            <select id="player-color">
+                                <option value="white">White (First)</option>
+                                <option value="black">Black (Second)</option>
+                                <option value="both">Both (Analysis)</option>
+                            </select>
+                        </div>
+
+                        <div class="mode-select">
+                            <label>Difficulty:</label>
+                            <select id="difficulty">
+                                <option value="easy">Easy</option>
+                                <option value="medium" selected>Medium</option>
+                                <option value="hard">Hard</option>
+                            </select>
+                        </div>
+                    </div>
+
+                    <div class="stats-row">
+                        <span id="stats-display">W: 0 | L: 0</span>
+                        <button id="reset-stats" class="btn btn-small">Reset</button>
                     </div>
 
                     <div class="hint-legend" id="hint-legend">

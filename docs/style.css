@@ -310,14 +310,21 @@ main {
     margin-right: 4px;
 }
 
-.mode-select {
+.selects-row {
+    display: flex;
+    gap: 15px;
     margin-bottom: 20px;
+}
+
+.mode-select {
+    flex: 1;
 }
 
 .mode-select label {
     display: block;
     margin-bottom: 8px;
     color: var(--text-muted);
+    font-size: 0.85rem;
 }
 
 .mode-select select {
@@ -327,8 +334,46 @@ main {
     border: none;
     background: var(--secondary-color);
     color: var(--text-color);
-    font-size: 1rem;
+    font-size: 0.95rem;
     cursor: pointer;
+}
+
+.stats-row {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    padding: 12px 15px;
+    background: var(--secondary-color);
+    border-radius: 6px;
+    margin-bottom: 20px;
+}
+
+#stats-display {
+    font-weight: 600;
+    font-size: 0.95rem;
+}
+
+.stat-win {
+    color: var(--win-color);
+}
+
+.stat-loss {
+    color: var(--loss-color);
+}
+
+.btn-small {
+    padding: 6px 12px;
+    font-size: 0.8rem;
+}
+
+.btn-icon {
+    padding: 10px 12px;
+    font-size: 1.1rem;
+}
+
+.btn-secondary {
+    background: var(--surface-color);
+    border: 1px solid var(--secondary-color);
 }
 
 .hint-legend {
@@ -471,6 +516,10 @@ footer a:hover {
 
 /* Responsive */
 @media (max-width: 768px) {
+    .container {
+        padding: 10px;
+    }
+
     .board {
         grid-template-columns: repeat(5, 60px);
         grid-template-rows: repeat(5, 60px);
@@ -498,6 +547,93 @@ footer a:hover {
     .game-info {
         width: 100%;
         max-width: 380px;
+    }
+
+    .controls {
+        justify-content: center;
+    }
+
+    .btn {
+        padding: 8px 14px;
+        font-size: 0.85rem;
+    }
+
+    .selects-row {
+        flex-direction: column;
+        gap: 10px;
+    }
+
+    .history-panel {
+        width: 100%;
+        max-width: 380px;
+    }
+
+    .rules-content {
+        grid-template-columns: 1fr;
+    }
+}
+
+@media (max-width: 400px) {
+    .board {
+        grid-template-columns: repeat(5, 50px);
+        grid-template-rows: repeat(5, 50px);
+        gap: 2px;
+        padding: 2px;
+    }
+
+    .square {
+        width: 50px;
+        height: 50px;
+    }
+
+    .piece {
+        width: 38px;
+        height: 38px;
+    }
+
+    .board-container {
+        padding: 12px;
+    }
+
+    header h1 {
+        font-size: 1.6rem;
+        letter-spacing: 2px;
+    }
+
+    .subtitle {
+        font-size: 0.9rem;
+    }
+
+    .controls {
+        gap: 6px;
+    }
+
+    .btn {
+        padding: 8px 10px;
+        font-size: 0.8rem;
+    }
+
+    .btn-icon {
+        padding: 8px 10px;
+    }
+}
+
+/* Touch-friendly improvements */
+@media (hover: none) {
+    .square:hover {
+        filter: none;
+    }
+
+    .piece:hover {
+        transform: none;
+    }
+
+    .square.selected {
+        box-shadow: inset 0 0 0 5px var(--primary-color);
+    }
+
+    .btn:active {
+        transform: scale(0.95);
     }
 }
 
@@ -551,4 +687,38 @@ footer a:hover {
 .game-over-content .btn {
     font-size: 1.1rem;
     padding: 12px 30px;
+}
+
+.game-over-buttons {
+    display: flex;
+    gap: 15px;
+    justify-content: center;
+}
+
+/* Toast notification */
+.toast {
+    position: fixed;
+    bottom: 30px;
+    left: 50%;
+    transform: translateX(-50%) translateY(100px);
+    background: var(--surface-color);
+    color: var(--text-color);
+    padding: 15px 25px;
+    border-radius: 8px;
+    box-shadow: 0 5px 20px rgba(0, 0, 0, 0.4);
+    z-index: 200;
+    opacity: 0;
+    transition: transform 0.3s ease, opacity 0.3s ease;
+    font-weight: 500;
+}
+
+.toast.visible {
+    transform: translateX(-50%) translateY(0);
+    opacity: 1;
+}
+
+/* Animated piece */
+.piece.animating {
+    pointer-events: none;
+    box-shadow: 0 8px 20px rgba(0, 0, 0, 0.5);
 }
