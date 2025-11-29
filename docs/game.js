@@ -53,7 +53,7 @@ let gameState = {
     winner: null,
     difficulty: 'medium',
     animating: false,
-    rulesVariant: 'flexible' // 'flexible' or 'official'
+    rulesVariant: 'official' // 'official' or 'flexible'
 };
 
 // Load stats from localStorage
@@ -106,15 +106,13 @@ function initSounds() {
 
 // Initialize starting position
 function initGame() {
-    // In Official rules, first player skips bobail move on turn 1
-    const skipFirstBobail = (gameState.rulesVariant === 'official');
-
+    // First player always skips bobail move on turn 1 (core Bobail rule)
     gameState = {
         whitePawns: [0, 1, 2, 3, 4],      // Top row (White's home is row 0)
         blackPawns: [20, 21, 22, 23, 24], // Bottom row (Black's home is row 4)
         bobailSquare: 12,
         whiteToMove: true,
-        phase: skipFirstBobail ? 'pawn' : 'bobail', // Skip bobail on first turn in Official
+        phase: 'pawn', // First turn always skips bobail move
         selectedSquare: null,
         validMoves: [],
         moveHistory: [],
@@ -658,8 +656,8 @@ function makeAIMove() {
     if (gameState.gameOver || gameState.animating) return;
     if (!shouldAIMove()) return; // Safety check - don't move if not AI's turn
 
-    // Handle first move in Official rules (pawn only, no bobail)
-    if (gameState.isFirstMove && gameState.rulesVariant === 'official') {
+    // Handle first move (pawn only, no bobail - core Bobail rule)
+    if (gameState.isFirstMove) {
         // On first move, just pick a pawn move (no bobail move)
         const pawns = gameState.whiteToMove ? gameState.whitePawns : gameState.blackPawns;
         // Simple heuristic: move a central pawn toward center
@@ -787,6 +785,12 @@ function renderBoard() {
             if (piece) {
                 const pieceEl = document.createElement('div');
                 pieceEl.className = `piece ${piece}`;
+
+                // Add pulsing effect to bobail when player needs to move it
+                if (piece === 'bobail' && gameState.phase === 'bobail' && !gameState.gameOver && !shouldAIMove()) {
+                    pieceEl.classList.add('needs-move');
+                }
+
                 square.appendChild(pieceEl);
             }
 
