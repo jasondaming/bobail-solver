@@ -1260,6 +1260,37 @@ document.addEventListener('DOMContentLoaded', () => {
         });
     }
 
+    // Setup import button
+    const setupImportBtn = document.getElementById('setup-import');
+    if (setupImportBtn) {
+        setupImportBtn.addEventListener('click', () => {
+            const input = prompt('Paste a shared position URL or code:');
+            if (!input) return;
+
+            // Extract position code from URL or use raw input
+            let code = input.trim();
+            if (code.includes('?pos=')) {
+                const match = code.match(/[?&]pos=([^&]+)/);
+                if (match) code = match[1];
+            }
+
+            const state = decodeGameState(code);
+            if (state) {
+                gameState.whitePawns = state.whitePawns;
+                gameState.blackPawns = state.blackPawns;
+                gameState.bobailSquare = state.bobailSquare;
+                // Update the checkbox to match imported state
+                const checkbox = document.getElementById('setup-white-to-move');
+                if (checkbox) checkbox.checked = state.whiteToMove;
+                renderBoard();
+                updateUI();
+                showToast('Position imported');
+            } else {
+                showToast('Invalid position code');
+            }
+        });
+    }
+
     // Keyboard controls
     document.addEventListener('keydown', (e) => {
         if (gameState.gameOver || gameState.animating || shouldAIMove()) return;
