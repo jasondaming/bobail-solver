@@ -124,6 +124,11 @@ function initGame() {
     renderBoard();
     updateUI();
     updateStatsDisplay();
+
+    // If playing as Black, AI (White) moves first
+    if (shouldAIMove()) {
+        setTimeout(makeAIMove, 500);
+    }
 }
 
 // Convert between row/col and square index
@@ -340,8 +345,9 @@ function makeMove(toSquare, animate = true) {
         renderBoard();
         updateUI();
 
-        // AI move if needed
-        if (!gameState.gameOver && shouldAIMove()) {
+        // AI move if needed - but only after a complete turn (back to bobail phase)
+        // This prevents double-triggering when AI is mid-turn
+        if (!gameState.gameOver && gameState.phase === 'bobail' && shouldAIMove()) {
             setTimeout(makeAIMove, 400);
         }
     };
@@ -618,6 +624,7 @@ function alphaBeta(state, depth, alpha, beta, maximizing) {
 // AI makes a move using alpha-beta search
 function makeAIMove() {
     if (gameState.gameOver || gameState.animating) return;
+    if (!shouldAIMove()) return; // Safety check - don't move if not AI's turn
 
     // Convert gameState to search state
     const state = {
@@ -641,7 +648,7 @@ function makeAIMove() {
 
         // Make pawn move (after animation completes)
         setTimeout(() => {
-            if (gameState.phase === 'pawn' && !gameState.gameOver && !gameState.animating) {
+            if (gameState.phase === 'pawn' && !gameState.gameOver && !gameState.animating && shouldAIMove()) {
                 gameState.selectedSquare = result.move.pawnFrom;
                 makeMove(result.move.pawnTo);
             }
