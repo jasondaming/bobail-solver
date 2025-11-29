@@ -11,15 +11,15 @@
     --secondary-color: #0f3460;
     --text-color: #eee;
     --text-muted: #888;
-    --white-piece: #f5f5f5;
-    --black-piece: #2d2d2d;
-    --bobail-color: #ffd700;
+    --white-piece: #dc2626;    /* Red for "White" player */
+    --black-piece: #16a34a;    /* Green for "Black" player */
+    --bobail-color: #fbbf24;   /* Yellow/amber bobail */
     --win-color: #4ade80;
     --draw-color: #facc15;
     --loss-color: #f87171;
-    --board-light: #c9a67a;
-    --board-dark: #8b6b47;
-    --highlight: rgba(255, 215, 0, 0.4);
+    --board-light: #d4a76a;    /* Sandy/earthy board */
+    --board-dark: #8b5a2b;     /* Darker earth tone */
+    --highlight: rgba(251, 191, 36, 0.4);
     --selected: rgba(233, 69, 96, 0.5);
 }
 

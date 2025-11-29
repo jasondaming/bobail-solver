@@ -106,12 +106,15 @@ function initSounds() {
 
 // Initialize starting position
 function initGame() {
+    // In Official rules, first player skips bobail move on turn 1
+    const skipFirstBobail = (gameState.rulesVariant === 'official');
+
     gameState = {
         whitePawns: [0, 1, 2, 3, 4],      // Top row (White's home is row 0)
         blackPawns: [20, 21, 22, 23, 24], // Bottom row (Black's home is row 4)
         bobailSquare: 12,
         whiteToMove: true,
-        phase: 'bobail',
+        phase: skipFirstBobail ? 'pawn' : 'bobail', // Skip bobail on first turn in Official
         selectedSquare: null,
         validMoves: [],
         moveHistory: [],
@@ -120,7 +123,9 @@ function initGame() {
         gameOver: false,
         winner: null,
         difficulty: gameState.difficulty,
-        animating: false
+        animating: false,
+        rulesVariant: gameState.rulesVariant,
+        isFirstMove: true  // Track if this is the very first move
     };
     renderBoard();
     updateUI();
@@ -346,6 +351,7 @@ function makeMove(toSquare, animate = true) {
             gameState.phase = 'bobail';
             gameState.selectedSquare = null;
             gameState.validMoves = [];
+            gameState.isFirstMove = false;  // First move is complete
         }
 
         // Check for game over
@@ -652,6 +658,31 @@ function makeAIMove() {
     if (gameState.gameOver || gameState.animating) return;
     if (!shouldAIMove()) return; // Safety check - don't move if not AI's turn
 
+    // Handle first move in Official rules (pawn only, no bobail)
+    if (gameState.isFirstMove && gameState.rulesVariant === 'official') {
+        // On first move, just pick a pawn move (no bobail move)
+        const pawns = gameState.whiteToMove ? gameState.whitePawns : gameState.blackPawns;
+        // Simple heuristic: move a central pawn toward center
+        const centerPawn = pawns[2]; // Middle pawn
+        const pawnMoves = getPawnMovesForState({
+            whitePawns: [...gameState.whitePawns],
+            blackPawns: [...gameState.blackPawns],
+            bobailSquare: gameState.bobailSquare
+        }, centerPawn);
+
+        if (pawnMoves.length > 0) {
+            gameState.selectedSquare = centerPawn;
+            // Pick a move toward center (square 12)
+            const bestMove = pawnMoves.reduce((best, sq) => {
+                const distToBobail = Math.abs(sq - gameState.bobailSquare);
+                const bestDist = Math.abs(best - gameState.bobailSquare);
+                return distToBobail < bestDist ? sq : best;
+            }, pawnMoves[0]);
+            makeMove(bestMove);
+        }
+        return;
+    }
+
     // Convert gameState to search state
     const state = {
         whitePawns: [...gameState.whitePawns],
@@ -782,10 +813,10 @@ function updateUI() {
     const turnDot = document.querySelector('.turn-dot');
 
     if (gameState.gameOver) {
-        turnText.textContent = `${gameState.winner === 'white' ? 'White' : 'Black'} wins!`;
+        turnText.textContent = `${gameState.winner === 'white' ? 'Red' : 'Green'} wins!`;
     } else {
         const phaseText = gameState.phase === 'bobail' ? 'Move Bobail' : 'Move Pawn';
-        turnText.textContent = `${gameState.whiteToMove ? 'White' : 'Black'}: ${phaseText}`;
+        turnText.textContent = `${gameState.whiteToMove ? 'Red' : 'Green'}: ${phaseText}`;
     }
 
     turnDot.className = 'turn-dot';
@@ -822,7 +853,7 @@ function updateMoveHistory() {
         const entry = document.createElement('div');
         entry.className = 'move-entry';
 
-        const color = bobailMove.whiteToMove ? 'W' : 'B';
+        const color = bobailMove.whiteToMove ? 'R' : 'G';
         let text = `<span class="move-number">${moveNum}.</span>${color}: `;
         text += `B${squareToNotation(bobailMove.from)}-${squareToNotation(bobailMove.to)}`;
 
@@ -880,7 +911,7 @@ function showGameOverOverlay() {
         title.textContent = 'You Lose!';
         title.style.color = 'var(--loss-color)';
     } else {
-        title.textContent = `${gameState.winner === 'white' ? 'White' : 'Black'} Wins!`;
+        title.textContent = `${gameState.winner === 'white' ? 'Red' : 'Green'} Wins!`;
         title.style.color = '';
     }
 
