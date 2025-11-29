@@ -229,11 +229,12 @@ function checkGameOver() {
         return { over: true, winner: 'black' };
     }
 
-    // Check if Bobail is trapped (can't move on opponent's turn)
+    // Check if Bobail is trapped (can't move)
     // This happens at the start of a turn (bobail phase)
+    // The player who TRAPPED the bobail wins (the opponent of current player)
     if (gameState.phase === 'bobail' && getBobailMoves().length === 0) {
-        // Current player wins because opponent trapped the bobail
-        return { over: true, winner: gameState.whiteToMove ? 'white' : 'black' };
+        // Opponent wins because they trapped the bobail
+        return { over: true, winner: gameState.whiteToMove ? 'black' : 'white' };
     }
 
     return { over: false, winner: null };
@@ -446,8 +447,9 @@ function evaluate(state) {
     // Check if bobail is trapped
     const bobailMoves = getBobailMovesForState(state);
     if (bobailMoves.length === 0) {
-        // Whoever's turn it is wins (they trapped the bobail)
-        return state.whiteToMove ? 10000 : -10000;
+        // The opponent trapped the bobail, so opponent wins
+        // If it's White's turn and bobail is trapped, Black wins (trapped White)
+        return state.whiteToMove ? -10000 : 10000;
     }
 
     let score = 0;
