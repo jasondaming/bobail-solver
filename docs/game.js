@@ -52,7 +52,8 @@ let gameState = {
     gameOver: false,
     winner: null,
     difficulty: 'medium',
-    animating: false
+    animating: false,
+    rulesVariant: 'flexible' // 'flexible' or 'official'
 };
 
 // Load stats from localStorage
@@ -184,13 +185,26 @@ function getPawnMoves(sq) {
     for (const [dr, dc] of DIRECTIONS) {
         let newRow = row + dr;
         let newCol = col + dc;
+        let lastValidSq = null;
 
         while (isValidSquare(newRow, newCol)) {
             const newSq = toSquare(newRow, newCol);
             if (isOccupied(newSq)) break;
-            moves.push(newSq);
+
+            if (gameState.rulesVariant === 'flexible') {
+                // Flexible: can stop at any square along the ray
+                moves.push(newSq);
+            } else {
+                // Official: must move as far as possible, track last valid
+                lastValidSq = newSq;
+            }
             newRow += dr;
             newCol += dc;
+        }
+
+        // Official variant: only add the furthest square in this direction
+        if (gameState.rulesVariant === 'official' && lastValidSq !== null) {
+            moves.push(lastValidSq);
         }
     }
     return moves;
@@ -509,13 +523,23 @@ function getPawnMovesForState(state, sq) {
     for (const [dr, dc] of DIRECTIONS) {
         let newRow = row + dr;
         let newCol = col + dc;
+        let lastValidSq = null;
 
         while (isValidSquare(newRow, newCol)) {
             const newSq = toSquare(newRow, newCol);
             if (occupied.has(newSq)) break;
-            moves.push(newSq);
+
+            if (gameState.rulesVariant === 'flexible') {
+                moves.push(newSq);
+            } else {
+                lastValidSq = newSq;
+            }
             newRow += dr;
             newCol += dc;
+        }
+
+        if (gameState.rulesVariant === 'official' && lastValidSq !== null) {
+            moves.push(lastValidSq);
         }
     }
     return moves;
@@ -1009,6 +1033,15 @@ document.addEventListener('DOMContentLoaded', () => {
     if (difficultySelect) {
         difficultySelect.addEventListener('change', (e) => {
             gameState.difficulty = e.target.value;
+        });
+    }
+
+    // Rules variant select
+    const rulesSelect = document.getElementById('rules-variant');
+    if (rulesSelect) {
+        rulesSelect.addEventListener('change', (e) => {
+            gameState.rulesVariant = e.target.value;
+            initGame(); // Restart game when rules change
         });
     }
 
