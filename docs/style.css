@@ -11,8 +11,8 @@
     --secondary-color: #0f3460;
     --text-color: #eee;
     --text-muted: #888;
-    --white-piece: #dc2626;    /* Red for "White" player */
-    --black-piece: #16a34a;    /* Green for "Black" player */
+    --white-piece: #16a34a;    /* Green for first player */
+    --black-piece: #dc2626;    /* Red for second player */
     --bobail-color: #fbbf24;   /* Yellow/amber bobail */
     --win-color: #4ade80;
     --draw-color: #facc15;

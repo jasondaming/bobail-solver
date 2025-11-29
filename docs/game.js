@@ -813,10 +813,10 @@ function updateUI() {
     const turnDot = document.querySelector('.turn-dot');
 
     if (gameState.gameOver) {
-        turnText.textContent = `${gameState.winner === 'white' ? 'Red' : 'Green'} wins!`;
+        turnText.textContent = `${gameState.winner === 'white' ? 'Green' : 'Red'} wins!`;
     } else {
         const phaseText = gameState.phase === 'bobail' ? 'Move Bobail' : 'Move Pawn';
-        turnText.textContent = `${gameState.whiteToMove ? 'Red' : 'Green'}: ${phaseText}`;
+        turnText.textContent = `${gameState.whiteToMove ? 'Green' : 'Red'}: ${phaseText}`;
     }
 
     turnDot.className = 'turn-dot';
@@ -853,7 +853,7 @@ function updateMoveHistory() {
         const entry = document.createElement('div');
         entry.className = 'move-entry';
 
-        const color = bobailMove.whiteToMove ? 'R' : 'G';
+        const color = bobailMove.whiteToMove ? 'G' : 'R';
         let text = `<span class="move-number">${moveNum}.</span>${color}: `;
         text += `B${squareToNotation(bobailMove.from)}-${squareToNotation(bobailMove.to)}`;
 
@@ -911,7 +911,7 @@ function showGameOverOverlay() {
         title.textContent = 'You Lose!';
         title.style.color = 'var(--loss-color)';
     } else {
-        title.textContent = `${gameState.winner === 'white' ? 'Red' : 'Green'} Wins!`;
+        title.textContent = `${gameState.winner === 'white' ? 'Green' : 'Red'} Wins!`;
         title.style.color = '';
     }
 
