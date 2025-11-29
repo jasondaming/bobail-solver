@@ -55,7 +55,8 @@ let gameState = {
     animating: false,
     rulesVariant: 'official', // 'official' or 'flexible'
     setupMode: false,         // Board setup mode
-    setupPiece: 'white'       // Which piece type to place: 'white', 'black', 'bobail', 'clear'
+    setupPiece: 'white',      // Which piece type to place: 'white', 'black', 'bobail', 'clear'
+    aiThinking: false         // AI is computing a move
 };
 
 // Load stats from localStorage
@@ -653,11 +654,32 @@ function alphaBeta(state, depth, alpha, beta, maximizing) {
     }
 }
 
+// Show/hide thinking indicator
+function setThinking(thinking) {
+    gameState.aiThinking = thinking;
+    const turnIndicator = document.getElementById('turn-indicator');
+    if (turnIndicator) {
+        turnIndicator.classList.toggle('thinking', thinking);
+    }
+    updateUI();
+}
+
 // AI makes a move using alpha-beta search
 function makeAIMove() {
     if (gameState.gameOver || gameState.animating) return;
     if (!shouldAIMove()) return; // Safety check - don't move if not AI's turn
 
+    setThinking(true);
+
+    // Use setTimeout to allow UI to update before heavy computation
+    setTimeout(() => {
+        doAIMove();
+        setThinking(false);
+    }, 50);
+}
+
+// Actual AI move logic
+function doAIMove() {
     // Handle first move (pawn only, no bobail - core Bobail rule)
     if (gameState.isFirstMove) {
         // On first move, just pick a pawn move (no bobail move)
@@ -859,6 +881,8 @@ function updateUI() {
     if (gameState.setupMode) {
         turnText.textContent = 'Setup Mode - Click to place pieces';
         turnDot.className = 'turn-dot';
+    } else if (gameState.aiThinking) {
+        turnText.textContent = `${gameState.whiteToMove ? 'Green' : 'Red'} is thinking...`;
     } else if (gameState.gameOver) {
         turnText.textContent = `${gameState.winner === 'white' ? 'Green' : 'Red'} wins!`;
     } else {

@@ -262,6 +262,15 @@ main {
     border-bottom: 1px solid #333;
 }
 
+.turn-indicator.thinking {
+    animation: thinking-pulse 1s ease-in-out infinite;
+}
+
+@keyframes thinking-pulse {
+    0%, 100% { opacity: 1; }
+    50% { opacity: 0.5; }
+}
+
 .turn-dot {
     width: 24px;
     height: 24px;
