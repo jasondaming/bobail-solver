@@ -29,6 +29,9 @@ let stats = {
     draws: 0
 };
 
+// Game history - stores completed games
+let gameHistory = [];
+
 // Sound effects
 const sounds = {
     move: null,
@@ -56,7 +59,9 @@ let gameState = {
     rulesVariant: 'official', // 'official' or 'flexible'
     setupMode: false,         // Board setup mode
     setupPiece: 'white',      // Which piece type to place: 'white', 'black', 'bobail', 'clear'
-    aiThinking: false         // AI is computing a move
+    aiThinking: false,        // AI is computing a move
+    replayMode: false,        // Viewing historical position
+    replayIndex: 0            // Current position in replay (0 = start, moveHistory.length = current)
 };
 
 // Load stats from localStorage
@@ -70,6 +75,117 @@ function loadStats() {
 // Save stats to localStorage
 function saveStats() {
     localStorage.setItem('bobail-stats', JSON.stringify(stats));
+}
+
+// Load game history from localStorage
+function loadGameHistory() {
+    const saved = localStorage.getItem('bobail-game-history');
+    if (saved) {
+        gameHistory = JSON.parse(saved);
+    }
+}
+
+// Save game history to localStorage
+function saveGameHistory() {
+    // Keep only the last 20 games
+    if (gameHistory.length > 20) {
+        gameHistory = gameHistory.slice(-20);
+    }
+    localStorage.setItem('bobail-game-history', JSON.stringify(gameHistory));
+}
+
+// Save current game to history
+function saveGameToHistory() {
+    if (gameState.moveHistory.length === 0) return;
+
+    const game = {
+        id: Date.now(),
+        date: new Date().toLocaleDateString(),
+        time: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
+        moves: [...gameState.moveHistory],
+        winner: gameState.winner,
+        playerColor: gameState.playerColor,
+        rulesVariant: gameState.rulesVariant,
+        moveCount: Math.ceil(gameState.moveHistory.length / 2)
+    };
+
+    gameHistory.push(game);
+    saveGameHistory();
+    updateGameHistoryDisplay();
+}
+
+// Load a saved game for review
+function loadGameForReview(gameId) {
+    const game = gameHistory.find(g => g.id === gameId);
+    if (!game) return;
+
+    // Reset to starting position
+    gameState.whitePawns = [0, 1, 2, 3, 4];
+    gameState.blackPawns = [20, 21, 22, 23, 24];
+    gameState.bobailSquare = 12;
+    gameState.whiteToMove = true;
+    gameState.phase = 'pawn';
+    gameState.moveHistory = [...game.moves];
+    gameState.gameOver = game.winner !== null;
+    gameState.winner = game.winner;
+    gameState.playerColor = 'both'; // Review mode
+    gameState.selectedSquare = null;
+    gameState.validMoves = [];
+    gameState.replayMode = true;
+    gameState.replayIndex = 0;
+    gameState.isFirstMove = false;
+
+    hideGameOverOverlay();
+    renderBoard();
+    updateUI();
+    showToast(`Loaded game from ${game.date}`);
+}
+
+// Delete a game from history
+function deleteGameFromHistory(gameId) {
+    gameHistory = gameHistory.filter(g => g.id !== gameId);
+    saveGameHistory();
+    updateGameHistoryDisplay();
+}
+
+// Update game history display
+function updateGameHistoryDisplay() {
+    const historyList = document.getElementById('game-history-list');
+    if (!historyList) return;
+
+    historyList.innerHTML = '';
+
+    if (gameHistory.length === 0) {
+        historyList.innerHTML = '<div class="no-games">No saved games</div>';
+        return;
+    }
+
+    // Show games in reverse order (newest first)
+    [...gameHistory].reverse().forEach(game => {
+        const entry = document.createElement('div');
+        entry.className = 'game-history-entry';
+
+        const resultClass = game.winner === game.playerColor ? 'win' :
+                           game.winner && game.winner !== game.playerColor ? 'loss' : 'draw';
+        const resultText = game.winner === 'white' ? 'G wins' :
+                          game.winner === 'black' ? 'R wins' : 'Draw';
+
+        entry.innerHTML = `
+            <div class="game-info-row">
+                <span class="game-date">${game.date} ${game.time}</span>
+                <span class="game-result ${resultClass}">${resultText}</span>
+            </div>
+            <div class="game-details">
+                ${game.moveCount} moves | ${game.rulesVariant === 'official' ? 'Official' : 'Flexible'}
+            </div>
+            <div class="game-actions">
+                <button class="btn btn-small" onclick="loadGameForReview(${game.id})">Review</button>
+                <button class="btn btn-small btn-secondary" onclick="deleteGameFromHistory(${game.id})">Delete</button>
+            </div>
+        `;
+
+        historyList.appendChild(entry);
+    });
 }
 
 // Initialize sound effects
@@ -126,8 +242,16 @@ function initGame() {
         difficulty: gameState.difficulty,
         animating: false,
         rulesVariant: gameState.rulesVariant,
-        isFirstMove: true  // Track if this is the very first move
+        isFirstMove: true,  // Track if this is the very first move
+        replayMode: false,
+        replayIndex: 0
     };
+    // Auto-select bobail if it's player's turn in bobail phase
+    if (!gameState.gameOver && gameState.phase === 'bobail' && !shouldAIMove()) {
+        gameState.selectedSquare = gameState.bobailSquare;
+        gameState.validMoves = getBobailMoves();
+    }
+
     renderBoard();
     updateUI();
     updateStatsDisplay();
@@ -364,6 +488,12 @@ function makeMove(toSquare, animate = true) {
             updateStats(result.winner);
         }
 
+        // Auto-select bobail at start of player's turn (bobail phase)
+        if (!gameState.gameOver && gameState.phase === 'bobail' && !shouldAIMove()) {
+            gameState.selectedSquare = gameState.bobailSquare;
+            gameState.validMoves = getBobailMoves();
+        }
+
         renderBoard();
         updateUI();
 
@@ -383,6 +513,9 @@ function makeMove(toSquare, animate = true) {
 
 // Update stats after game over
 function updateStats(winner) {
+    // Save game to history (for all game types)
+    saveGameToHistory();
+
     if (gameState.playerColor === 'both') return;
 
     const playerWon = (gameState.playerColor === winner);
@@ -449,10 +582,92 @@ function undoMove() {
 
 // Check if AI should move
 function shouldAIMove() {
+    if (gameState.replayMode) return false; // Don't move during replay
     if (gameState.playerColor === 'both') return false;
     if (gameState.playerColor === 'white' && !gameState.whiteToMove) return true;
     if (gameState.playerColor === 'black' && gameState.whiteToMove) return true;
     return false;
+}
+
+// ==================== Replay Navigation ====================
+
+// Get position at a specific move index (reconstructs from starting position)
+function getPositionAtMove(moveIndex) {
+    // Start from initial position
+    const pos = {
+        whitePawns: [0, 1, 2, 3, 4],
+        blackPawns: [20, 21, 22, 23, 24],
+        bobailSquare: 12,
+        whiteToMove: true,
+        phase: 'pawn' // First move is pawn only
+    };
+
+    // Apply moves up to the given index
+    for (let i = 0; i < moveIndex && i < gameState.moveHistory.length; i++) {
+        const move = gameState.moveHistory[i];
+
+        if (move.type === 'bobail') {
+            pos.bobailSquare = move.to;
+            pos.phase = 'pawn';
+        } else if (move.type === 'pawn') {
+            const pawns = move.whiteToMove ? pos.whitePawns : pos.blackPawns;
+            const idx = pawns.indexOf(move.from);
+            if (idx >= 0) {
+                pawns[idx] = move.to;
+            }
+            pos.whiteToMove = !move.whiteToMove;
+            pos.phase = 'bobail';
+        }
+    }
+
+    // Handle phase for display
+    if (moveIndex > 0) {
+        const lastMove = gameState.moveHistory[moveIndex - 1];
+        if (lastMove.type === 'bobail') {
+            pos.phase = 'pawn';
+            pos.whiteToMove = lastMove.whiteToMove;
+        } else {
+            pos.phase = 'bobail';
+            pos.whiteToMove = !lastMove.whiteToMove;
+        }
+    }
+
+    return pos;
+}
+
+// Navigate to a specific position in history
+function navigateToMove(index) {
+    const maxIndex = gameState.moveHistory.length;
+    index = Math.max(0, Math.min(index, maxIndex));
+
+    if (index === maxIndex) {
+        // Return to current game state (exit replay mode)
+        gameState.replayMode = false;
+        gameState.replayIndex = maxIndex;
+    } else {
+        // Enter/continue replay mode
+        gameState.replayMode = true;
+        gameState.replayIndex = index;
+    }
+
+    gameState.selectedSquare = null;
+    gameState.validMoves = [];
+
+    renderBoard();
+    updateUI();
+    updateNavButtons();
+}
+
+// Update navigation button states
+function updateNavButtons() {
+    const maxIndex = gameState.moveHistory.length;
+    const current = gameState.replayMode ? gameState.replayIndex : maxIndex;
+
+    document.getElementById('nav-start').disabled = current === 0;
+    document.getElementById('nav-prev').disabled = current === 0;
+    document.getElementById('nav-next').disabled = current >= maxIndex;
+    document.getElementById('nav-end').disabled = current >= maxIndex;
+    document.getElementById('nav-position').textContent = `${current}/${maxIndex}`;
 }
 
 // ==================== AI with Alpha-Beta Search ====================
@@ -813,6 +1028,28 @@ function renderBoard() {
     const board = document.getElementById('board');
     board.innerHTML = '';
 
+    // Get position to display (replay or current)
+    let displayPos;
+    if (gameState.replayMode) {
+        displayPos = getPositionAtMove(gameState.replayIndex);
+    } else {
+        displayPos = {
+            whitePawns: gameState.whitePawns,
+            blackPawns: gameState.blackPawns,
+            bobailSquare: gameState.bobailSquare,
+            whiteToMove: gameState.whiteToMove,
+            phase: gameState.phase
+        };
+    }
+
+    // Helper to get piece at square for display position
+    const getPieceAtDisplay = (sq) => {
+        if (sq === displayPos.bobailSquare) return 'bobail';
+        if (displayPos.whitePawns.includes(sq)) return 'white';
+        if (displayPos.blackPawns.includes(sq)) return 'black';
+        return null;
+    };
+
     for (let row = 0; row < BOARD_SIZE; row++) {
         for (let col = 0; col < BOARD_SIZE; col++) {
             const sq = toSquare(row, col);
@@ -821,21 +1058,21 @@ function renderBoard() {
             square.classList.add((row + col) % 2 === 0 ? 'light' : 'dark');
             square.dataset.square = sq;
 
-            // Highlight selected square
-            if (sq === gameState.selectedSquare) {
+            // Highlight selected square (only when not in replay mode)
+            if (!gameState.replayMode && sq === gameState.selectedSquare) {
                 square.classList.add('selected');
             }
 
-            // Show valid moves
-            if (gameState.validMoves.includes(sq)) {
+            // Show valid moves (only when not in replay mode)
+            if (!gameState.replayMode && gameState.validMoves.includes(sq)) {
                 square.classList.add('valid-move');
                 if (isOccupied(sq)) {
                     square.classList.add('has-piece');
                 }
             }
 
-            // Add hints if enabled
-            if (gameState.hintsEnabled && !gameState.gameOver) {
+            // Add hints if enabled (only when not in replay mode)
+            if (!gameState.replayMode && gameState.hintsEnabled && !gameState.gameOver) {
                 const hint = getMoveHint(sq);
                 if (hint) {
                     square.classList.add(`hint-${hint}`);
@@ -843,13 +1080,13 @@ function renderBoard() {
             }
 
             // Add piece if present
-            const piece = getPieceAt(sq);
+            const piece = getPieceAtDisplay(sq);
             if (piece) {
                 const pieceEl = document.createElement('div');
                 pieceEl.className = `piece ${piece}`;
 
-                // Add pulsing effect to bobail when player needs to move it
-                if (piece === 'bobail' && gameState.phase === 'bobail' && !gameState.gameOver && !shouldAIMove()) {
+                // Add pulsing effect to bobail when player needs to move it (not during replay)
+                if (!gameState.replayMode && piece === 'bobail' && gameState.phase === 'bobail' && !gameState.gameOver && !shouldAIMove()) {
                     pieceEl.classList.add('needs-move');
                 }
 
@@ -878,7 +1115,12 @@ function updateUI() {
     const turnText = document.getElementById('turn-text');
     const turnDot = document.querySelector('.turn-dot');
 
-    if (gameState.setupMode) {
+    if (gameState.replayMode) {
+        const pos = getPositionAtMove(gameState.replayIndex);
+        turnText.textContent = `Reviewing: Move ${gameState.replayIndex}`;
+        turnDot.className = 'turn-dot';
+        turnDot.classList.add(pos.whiteToMove ? 'white-dot' : 'black-dot');
+    } else if (gameState.setupMode) {
         turnText.textContent = 'Setup Mode - Click to place pieces';
         turnDot.className = 'turn-dot';
     } else if (gameState.aiThinking) {
@@ -890,7 +1132,7 @@ function updateUI() {
         turnText.textContent = `${gameState.whiteToMove ? 'Green' : 'Red'}: ${phaseText}`;
     }
 
-    if (!gameState.setupMode) {
+    if (!gameState.setupMode && !gameState.replayMode) {
         turnDot.className = 'turn-dot';
         turnDot.classList.add(gameState.whiteToMove ? 'white-dot' : 'black-dot');
     }
@@ -907,8 +1149,11 @@ function updateUI() {
     // Move history
     updateMoveHistory();
 
+    // Navigation buttons
+    updateNavButtons();
+
     // Show game over overlay if needed
-    if (gameState.gameOver) {
+    if (gameState.gameOver && !gameState.replayMode) {
         showGameOverOverlay();
     }
 }
@@ -1082,6 +1327,12 @@ function exitSetupMode() {
         gameState.winner = result.winner;
     }
 
+    // Auto-select bobail if it's player's turn
+    if (!gameState.gameOver && gameState.phase === 'bobail' && !shouldAIMove()) {
+        gameState.selectedSquare = gameState.bobailSquare;
+        gameState.validMoves = getBobailMoves();
+    }
+
     showToast('Position set - game started');
 
     // Trigger AI if needed
@@ -1119,6 +1370,11 @@ function loadFromURL() {
             gameState.whiteToMove = state.whiteToMove;
             gameState.phase = state.phase;
             gameState.playerColor = 'both'; // Analysis mode for shared positions
+            // Auto-select bobail if it's bobail phase
+            if (gameState.phase === 'bobail') {
+                gameState.selectedSquare = gameState.bobailSquare;
+                gameState.validMoves = getBobailMoves();
+            }
             renderBoard();
             updateUI();
             showToast('Position loaded from URL');
@@ -1141,12 +1397,16 @@ function showToast(message) {
 
 // Event listeners
 document.addEventListener('DOMContentLoaded', () => {
-    // Load saved stats and initialize sounds
+    // Load saved stats, game history, and initialize sounds
     loadStats();
+    loadGameHistory();
     initSounds();
 
     // Initialize game
     initGame();
+
+    // Update game history display
+    updateGameHistoryDisplay();
 
     // Load position from URL if present
     loadFromURL();
@@ -1173,6 +1433,18 @@ document.addEventListener('DOMContentLoaded', () => {
 
     // Undo
     document.getElementById('undo').addEventListener('click', undoMove);
+
+    // History navigation
+    document.getElementById('nav-start').addEventListener('click', () => navigateToMove(0));
+    document.getElementById('nav-prev').addEventListener('click', () => {
+        const current = gameState.replayMode ? gameState.replayIndex : gameState.moveHistory.length;
+        navigateToMove(current - 1);
+    });
+    document.getElementById('nav-next').addEventListener('click', () => {
+        const current = gameState.replayMode ? gameState.replayIndex : gameState.moveHistory.length;
+        navigateToMove(current + 1);
+    });
+    document.getElementById('nav-end').addEventListener('click', () => navigateToMove(gameState.moveHistory.length));
 
     // Player color select
     document.getElementById('player-color').addEventListener('change', (e) => {
@@ -1317,9 +1589,30 @@ document.addEventListener('DOMContentLoaded', () => {
 
     // Keyboard controls
     document.addEventListener('keydown', (e) => {
-        if (gameState.gameOver || gameState.animating || shouldAIMove()) return;
+        // Arrow keys for history navigation (always available)
+        if (e.key === 'ArrowLeft') {
+            e.preventDefault();
+            const current = gameState.replayMode ? gameState.replayIndex : gameState.moveHistory.length;
+            navigateToMove(current - 1);
+            return;
+        } else if (e.key === 'ArrowRight') {
+            e.preventDefault();
+            const current = gameState.replayMode ? gameState.replayIndex : gameState.moveHistory.length;
+            navigateToMove(current + 1);
+            return;
+        } else if (e.key === 'Home') {
+            e.preventDefault();
+            navigateToMove(0);
+            return;
+        } else if (e.key === 'End') {
+            e.preventDefault();
+            navigateToMove(gameState.moveHistory.length);
+            return;
+        }
 
-        // Arrow keys for navigation
+        if (gameState.gameOver || gameState.animating || shouldAIMove() || gameState.replayMode) return;
+
+        // Other keys only when playing
         if (e.key === 'Escape') {
             gameState.selectedSquare = null;
             gameState.validMoves = [];

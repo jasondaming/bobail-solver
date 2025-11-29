@@ -573,13 +573,14 @@ main {
     background: var(--surface-color);
     padding: 20px;
     border-radius: 12px;
-    min-width: 200px;
-    max-height: 500px;
+    min-width: 220px;
+    max-height: 700px;
+    overflow-y: auto;
     box-shadow: 0 10px 40px rgba(0, 0, 0, 0.3);
 }
 
 .history-panel h3 {
-    margin-bottom: 15px;
+    margin-bottom: 10px;
     padding-bottom: 10px;
     border-bottom: 1px solid #333;
     color: var(--text-muted);
@@ -588,11 +589,125 @@ main {
     letter-spacing: 1px;
 }
 
+.history-nav {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    gap: 8px;
+    margin-bottom: 15px;
+    padding-bottom: 10px;
+    border-bottom: 1px solid #333;
+}
+
+.btn-nav {
+    padding: 4px 10px;
+    min-width: 36px;
+    font-size: 0.9rem;
+    font-weight: bold;
+}
+
+.btn-nav:disabled {
+    opacity: 0.3;
+    cursor: not-allowed;
+}
+
+#nav-position {
+    font-size: 0.85rem;
+    color: var(--text-muted);
+    min-width: 50px;
+    text-align: center;
+}
+
 .move-list {
-    max-height: 400px;
+    max-height: 200px;
     overflow-y: auto;
     font-family: 'Courier New', monospace;
     font-size: 0.9rem;
+}
+
+/* Game History Section */
+.game-history-section {
+    margin-top: 20px;
+    padding-top: 15px;
+    border-top: 1px solid #333;
+}
+
+.game-history-section h3 {
+    margin-bottom: 10px;
+    color: var(--text-muted);
+    font-size: 0.9rem;
+    text-transform: uppercase;
+    letter-spacing: 1px;
+}
+
+.game-history-list {
+    max-height: 200px;
+    overflow-y: auto;
+}
+
+.game-history-entry {
+    background: var(--secondary-color);
+    border-radius: 6px;
+    padding: 10px;
+    margin-bottom: 8px;
+}
+
+.game-info-row {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    margin-bottom: 4px;
+}
+
+.game-date {
+    font-size: 0.8rem;
+    color: var(--text-muted);
+}
+
+.game-result {
+    font-weight: 600;
+    font-size: 0.85rem;
+    padding: 2px 8px;
+    border-radius: 4px;
+}
+
+.game-result.win {
+    background: var(--win-color);
+    color: #000;
+}
+
+.game-result.loss {
+    background: var(--loss-color);
+    color: #000;
+}
+
+.game-result.draw {
+    background: var(--draw-color);
+    color: #000;
+}
+
+.game-details {
+    font-size: 0.75rem;
+    color: var(--text-muted);
+    margin-bottom: 8px;
+}
+
+.game-actions {
+    display: flex;
+    gap: 6px;
+}
+
+.game-actions .btn {
+    padding: 4px 10px;
+    font-size: 0.75rem;
+}
+
+.no-games {
+    text-align: center;
+    color: var(--text-muted);
+    font-style: italic;
+    padding: 20px;
+    font-size: 0.85rem;
 }
 
 .move-entry {
