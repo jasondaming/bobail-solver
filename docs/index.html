@@ -26,7 +26,7 @@
                         <span id="turn-text">Green to move</span>
                     </div>
 
-                    <div class="evaluation" id="evaluation">
+                    <div class="evaluation hidden" id="evaluation">
                         <span class="eval-label">Position:</span>
                         <span class="eval-value" id="eval-value">--</span>
                     </div>
@@ -36,6 +36,7 @@
                             <span class="hint-icon">💡</span> Show Hints
                         </button>
                         <button id="new-game" class="btn">New Game</button>
+                        <button id="setup-btn" class="btn">Setup</button>
                         <button id="undo" class="btn">Undo</button>
                         <button id="share-btn" class="btn">Share</button>
                         <button id="sound-toggle" class="btn btn-icon active">🔊</button>
@@ -47,7 +48,7 @@
                             <select id="player-color">
                                 <option value="white" selected>Green (First)</option>
                                 <option value="black">Red (Second)</option>
-                                <option value="both">Both (Analysis)</option>
+                                <option value="both">Two Players</option>
                             </select>
                         </div>
 
@@ -86,6 +87,32 @@
                         </div>
                         <div class="legend-item">
                             <span class="legend-color loss"></span> Losing move
+                        </div>
+                    </div>
+
+                    <div class="setup-panel hidden" id="setup-panel">
+                        <h4>Setup Mode</h4>
+                        <div class="setup-pieces">
+                            <button class="setup-piece-btn active" data-piece="white">
+                                <span class="piece-icon green"></span> Green
+                            </button>
+                            <button class="setup-piece-btn" data-piece="black">
+                                <span class="piece-icon red"></span> Red
+                            </button>
+                            <button class="setup-piece-btn" data-piece="bobail">
+                                <span class="piece-icon bobail"></span> Bobail
+                            </button>
+                            <button class="setup-piece-btn" data-piece="clear">
+                                <span class="piece-icon clear">X</span> Clear
+                            </button>
+                        </div>
+                        <div class="setup-controls">
+                            <label>
+                                <input type="checkbox" id="setup-white-to-move" checked>
+                                Green to move
+                            </label>
+                            <button id="setup-done" class="btn">Done</button>
+                            <button id="setup-clear-all" class="btn btn-secondary">Clear All</button>
                         </div>
                     </div>
                 </div>

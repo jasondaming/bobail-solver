@@ -53,7 +53,9 @@ let gameState = {
     winner: null,
     difficulty: 'medium',
     animating: false,
-    rulesVariant: 'official' // 'official' or 'flexible'
+    rulesVariant: 'official', // 'official' or 'flexible'
+    setupMode: false,         // Board setup mode
+    setupPiece: 'white'       // Which piece type to place: 'white', 'black', 'bobail', 'clear'
 };
 
 // Load stats from localStorage
@@ -711,8 +713,46 @@ function makeAIMove() {
     }
 }
 
+// Handle square click in setup mode
+function handleSetupClick(sq) {
+    const currentPiece = getPieceAt(sq);
+
+    // Remove any existing piece at this square
+    if (currentPiece === 'bobail') {
+        gameState.bobailSquare = -1; // No bobail
+    } else if (currentPiece === 'white') {
+        gameState.whitePawns = gameState.whitePawns.filter(s => s !== sq);
+    } else if (currentPiece === 'black') {
+        gameState.blackPawns = gameState.blackPawns.filter(s => s !== sq);
+    }
+
+    // Place new piece based on selected type
+    if (gameState.setupPiece === 'clear') {
+        // Already cleared above
+    } else if (gameState.setupPiece === 'bobail') {
+        gameState.bobailSquare = sq;
+    } else if (gameState.setupPiece === 'white') {
+        if (!gameState.whitePawns.includes(sq)) {
+            gameState.whitePawns.push(sq);
+        }
+    } else if (gameState.setupPiece === 'black') {
+        if (!gameState.blackPawns.includes(sq)) {
+            gameState.blackPawns.push(sq);
+        }
+    }
+
+    renderBoard();
+    updateUI();
+}
+
 // Handle square click
 function handleSquareClick(sq) {
+    // Setup mode has its own handler
+    if (gameState.setupMode) {
+        handleSetupClick(sq);
+        return;
+    }
+
     if (gameState.gameOver) return;
     if (gameState.animating) return;
     if (shouldAIMove()) return; // Not player's turn
@@ -816,15 +856,20 @@ function updateUI() {
     const turnText = document.getElementById('turn-text');
     const turnDot = document.querySelector('.turn-dot');
 
-    if (gameState.gameOver) {
+    if (gameState.setupMode) {
+        turnText.textContent = 'Setup Mode - Click to place pieces';
+        turnDot.className = 'turn-dot';
+    } else if (gameState.gameOver) {
         turnText.textContent = `${gameState.winner === 'white' ? 'Green' : 'Red'} wins!`;
     } else {
         const phaseText = gameState.phase === 'bobail' ? 'Move Bobail' : 'Move Pawn';
         turnText.textContent = `${gameState.whiteToMove ? 'Green' : 'Red'}: ${phaseText}`;
     }
 
-    turnDot.className = 'turn-dot';
-    turnDot.classList.add(gameState.whiteToMove ? 'white-dot' : 'black-dot');
+    if (!gameState.setupMode) {
+        turnDot.className = 'turn-dot';
+        turnDot.classList.add(gameState.whiteToMove ? 'white-dot' : 'black-dot');
+    }
 
     // Evaluation (placeholder)
     const evalValue = document.getElementById('eval-value');
@@ -978,6 +1023,51 @@ function decodeGameState(code) {
     }
 }
 
+// Exit setup mode and validate position
+function exitSetupMode() {
+    // Check if position is valid
+    const hasValidBobail = gameState.bobailSquare >= 0 && gameState.bobailSquare < 25;
+
+    if (!hasValidBobail) {
+        showToast('Please place the Bobail on the board');
+        return false;
+    }
+
+    if (gameState.whitePawns.length === 0 && gameState.blackPawns.length === 0) {
+        showToast('Please place at least one pawn');
+        return false;
+    }
+
+    // Set who moves based on checkbox
+    const whiteToMoveCheckbox = document.getElementById('setup-white-to-move');
+    gameState.whiteToMove = whiteToMoveCheckbox ? whiteToMoveCheckbox.checked : true;
+
+    // Reset game state for play
+    gameState.phase = 'bobail';
+    gameState.selectedSquare = null;
+    gameState.validMoves = [];
+    gameState.moveHistory = [];
+    gameState.gameOver = false;
+    gameState.winner = null;
+    gameState.isFirstMove = false; // Not first move in custom setup
+
+    // Check for immediate game over
+    const result = checkGameOver();
+    if (result.over) {
+        gameState.gameOver = true;
+        gameState.winner = result.winner;
+    }
+
+    showToast('Position set - game started');
+
+    // Trigger AI if needed
+    if (!gameState.gameOver && shouldAIMove()) {
+        setTimeout(makeAIMove, 500);
+    }
+
+    return true;
+}
+
 // Share current position via URL
 function sharePosition() {
     const code = encodeGameState();
@@ -1044,6 +1134,9 @@ document.addEventListener('DOMContentLoaded', () => {
         e.target.innerHTML = gameState.hintsEnabled
             ? '<span class="hint-icon">💡</span> Hide Hints'
             : '<span class="hint-icon">💡</span> Show Hints';
+        // Show/hide evaluation with hints
+        const evalEl = document.getElementById('evaluation');
+        evalEl.classList.toggle('hidden', !gameState.hintsEnabled);
         renderBoard();
         updateUI();
     });
@@ -1104,6 +1197,66 @@ document.addEventListener('DOMContentLoaded', () => {
             saveStats();
             updateStatsDisplay();
             showToast('Stats reset');
+        });
+    }
+
+    // Setup mode button
+    const setupBtn = document.getElementById('setup-btn');
+    if (setupBtn) {
+        setupBtn.addEventListener('click', () => {
+            gameState.setupMode = !gameState.setupMode;
+            const setupPanel = document.getElementById('setup-panel');
+            setupPanel.classList.toggle('hidden', !gameState.setupMode);
+            setupBtn.classList.toggle('active', gameState.setupMode);
+            setupBtn.textContent = gameState.setupMode ? 'Playing' : 'Setup';
+
+            if (gameState.setupMode) {
+                // Entering setup mode
+                gameState.gameOver = false;
+                gameState.selectedSquare = null;
+                gameState.validMoves = [];
+                hideGameOverOverlay();
+            } else {
+                // Exiting setup mode - validate and start game
+                exitSetupMode();
+            }
+            renderBoard();
+            updateUI();
+        });
+    }
+
+    // Setup piece buttons
+    document.querySelectorAll('.setup-piece-btn').forEach(btn => {
+        btn.addEventListener('click', () => {
+            document.querySelectorAll('.setup-piece-btn').forEach(b => b.classList.remove('active'));
+            btn.classList.add('active');
+            gameState.setupPiece = btn.dataset.piece;
+        });
+    });
+
+    // Setup done button
+    const setupDoneBtn = document.getElementById('setup-done');
+    if (setupDoneBtn) {
+        setupDoneBtn.addEventListener('click', () => {
+            exitSetupMode();
+            gameState.setupMode = false;
+            document.getElementById('setup-panel').classList.add('hidden');
+            document.getElementById('setup-btn').classList.remove('active');
+            document.getElementById('setup-btn').textContent = 'Setup';
+            renderBoard();
+            updateUI();
+        });
+    }
+
+    // Setup clear all button
+    const setupClearBtn = document.getElementById('setup-clear-all');
+    if (setupClearBtn) {
+        setupClearBtn.addEventListener('click', () => {
+            gameState.whitePawns = [];
+            gameState.blackPawns = [];
+            gameState.bobailSquare = -1;
+            renderBoard();
+            updateUI();
         });
     }
 

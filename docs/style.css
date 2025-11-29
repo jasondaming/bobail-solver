@@ -23,6 +23,10 @@
     --selected: rgba(233, 69, 96, 0.5);
 }
 
+.hidden {
+    display: none !important;
+}
+
 body {
     font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
     background: var(--bg-color);
@@ -458,6 +462,101 @@ main {
 
 .legend-color.loss {
     background: var(--loss-color);
+}
+
+/* Setup Panel */
+.setup-panel {
+    padding-top: 15px;
+    border-top: 1px solid #333;
+}
+
+.setup-panel h4 {
+    margin-bottom: 12px;
+    color: var(--text-muted);
+    font-size: 0.9rem;
+    text-transform: uppercase;
+    letter-spacing: 1px;
+}
+
+.setup-pieces {
+    display: flex;
+    gap: 8px;
+    flex-wrap: wrap;
+    margin-bottom: 12px;
+}
+
+.setup-piece-btn {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    padding: 8px 12px;
+    border: 2px solid transparent;
+    border-radius: 6px;
+    background: var(--secondary-color);
+    color: var(--text-color);
+    cursor: pointer;
+    transition: all 0.2s;
+    font-size: 0.85rem;
+}
+
+.setup-piece-btn:hover {
+    background: var(--surface-color);
+    border-color: var(--text-muted);
+}
+
+.setup-piece-btn.active {
+    border-color: var(--primary-color);
+    background: var(--surface-color);
+}
+
+.piece-icon {
+    width: 18px;
+    height: 18px;
+    border-radius: 50%;
+    display: inline-block;
+}
+
+.piece-icon.green {
+    background: var(--white-piece);
+}
+
+.piece-icon.red {
+    background: var(--black-piece);
+}
+
+.piece-icon.bobail {
+    background: var(--bobail-color);
+}
+
+.piece-icon.clear {
+    background: #555;
+    color: #fff;
+    font-size: 12px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    font-weight: bold;
+}
+
+.setup-controls {
+    display: flex;
+    gap: 10px;
+    align-items: center;
+    flex-wrap: wrap;
+}
+
+.setup-controls label {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    font-size: 0.9rem;
+    cursor: pointer;
+}
+
+.setup-controls input[type="checkbox"] {
+    width: 16px;
+    height: 16px;
+    cursor: pointer;
 }
 
 /* History Panel */
