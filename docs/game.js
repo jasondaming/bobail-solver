@@ -663,11 +663,25 @@ function updateNavButtons() {
     const maxIndex = gameState.moveHistory.length;
     const current = gameState.replayMode ? gameState.replayIndex : maxIndex;
 
-    document.getElementById('nav-start').disabled = current === 0;
-    document.getElementById('nav-prev').disabled = current === 0;
-    document.getElementById('nav-next').disabled = current >= maxIndex;
-    document.getElementById('nav-end').disabled = current >= maxIndex;
-    document.getElementById('nav-position').textContent = `${current}/${maxIndex}`;
+    // Update both nav bars (history panel and board nav)
+    const navIds = [
+        ['nav-start', 'nav-prev', 'nav-next', 'nav-end', 'nav-position'],
+        ['board-nav-start', 'board-nav-prev', 'board-nav-next', 'board-nav-end', 'board-nav-position']
+    ];
+
+    navIds.forEach(([startId, prevId, nextId, endId, posId]) => {
+        const startBtn = document.getElementById(startId);
+        const prevBtn = document.getElementById(prevId);
+        const nextBtn = document.getElementById(nextId);
+        const endBtn = document.getElementById(endId);
+        const posEl = document.getElementById(posId);
+
+        if (startBtn) startBtn.disabled = current === 0;
+        if (prevBtn) prevBtn.disabled = current === 0;
+        if (nextBtn) nextBtn.disabled = current >= maxIndex;
+        if (endBtn) endBtn.disabled = current >= maxIndex;
+        if (posEl) posEl.textContent = `${current}/${maxIndex}`;
+    });
 }
 
 // ==================== AI with Alpha-Beta Search ====================
@@ -1434,17 +1448,29 @@ document.addEventListener('DOMContentLoaded', () => {
     // Undo
     document.getElementById('undo').addEventListener('click', undoMove);
 
-    // History navigation
-    document.getElementById('nav-start').addEventListener('click', () => navigateToMove(0));
-    document.getElementById('nav-prev').addEventListener('click', () => {
+    // History navigation - helper functions
+    const navStart = () => navigateToMove(0);
+    const navPrev = () => {
         const current = gameState.replayMode ? gameState.replayIndex : gameState.moveHistory.length;
         navigateToMove(current - 1);
-    });
-    document.getElementById('nav-next').addEventListener('click', () => {
+    };
+    const navNext = () => {
         const current = gameState.replayMode ? gameState.replayIndex : gameState.moveHistory.length;
         navigateToMove(current + 1);
-    });
-    document.getElementById('nav-end').addEventListener('click', () => navigateToMove(gameState.moveHistory.length));
+    };
+    const navEnd = () => navigateToMove(gameState.moveHistory.length);
+
+    // History panel navigation
+    document.getElementById('nav-start').addEventListener('click', navStart);
+    document.getElementById('nav-prev').addEventListener('click', navPrev);
+    document.getElementById('nav-next').addEventListener('click', navNext);
+    document.getElementById('nav-end').addEventListener('click', navEnd);
+
+    // Board navigation (below board)
+    document.getElementById('board-nav-start').addEventListener('click', navStart);
+    document.getElementById('board-nav-prev').addEventListener('click', navPrev);
+    document.getElementById('board-nav-next').addEventListener('click', navNext);
+    document.getElementById('board-nav-end').addEventListener('click', navEnd);
 
     // Player color select
     document.getElementById('player-color').addEventListener('change', (e) => {

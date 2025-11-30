@@ -85,6 +85,24 @@ main {
     border: 3px solid #4a2c17;
 }
 
+/* Navigation below board */
+.board-nav {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    gap: 8px;
+    margin-top: 15px;
+    padding-top: 12px;
+    border-top: 1px solid rgba(255, 255, 255, 0.1);
+}
+
+.board-nav span {
+    font-size: 0.85rem;
+    color: #d4a76a;
+    min-width: 50px;
+    text-align: center;
+}
+
 .board {
     display: grid;
     grid-template-columns: repeat(5, 90px);
@@ -279,13 +297,13 @@ main {
 }
 
 .turn-dot.white-dot {
-    background: linear-gradient(145deg, #ffffff, #d4d4d4);
-    border: 2px solid #bbb;
+    background: linear-gradient(145deg, #22c55e, #16a34a);
+    border: 2px solid #14532d;
 }
 
 .turn-dot.black-dot {
-    background: linear-gradient(145deg, #404040, #1a1a1a);
-    border: 2px solid #555;
+    background: linear-gradient(145deg, #ef4444, #dc2626);
+    border: 2px solid #7f1d1d;
 }
 
 .evaluation {
