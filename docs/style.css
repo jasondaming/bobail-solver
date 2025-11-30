@@ -795,7 +795,39 @@ footer a:hover {
     text-decoration: underline;
 }
 
-/* Responsive */
+/* Responsive - Wide screens: horizontal layout */
+@media (min-width: 1200px) {
+    main {
+        flex-wrap: nowrap;
+        align-items: flex-start;
+    }
+
+    .game-area {
+        flex-wrap: nowrap;
+    }
+
+    .history-panel {
+        min-width: 280px;
+        max-height: 600px;
+    }
+}
+
+/* Even wider screens: more compact */
+@media (min-width: 1400px) {
+    .container {
+        max-width: 1400px;
+    }
+
+    .game-info {
+        min-width: 280px;
+    }
+
+    .history-panel {
+        min-width: 300px;
+    }
+}
+
+/* Responsive - Smaller screens */
 @media (max-width: 900px) {
     .board {
         grid-template-columns: repeat(5, 70px);
