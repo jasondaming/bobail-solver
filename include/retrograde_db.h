@@ -12,10 +12,57 @@
 #include <vector>
 #include <queue>
 #include <condition_variable>
+#include <unordered_map>
 #include <rocksdb/db.h>
 #include <rocksdb/options.h>
 
 namespace bobail {
+
+// Simple bloom filter for fast duplicate rejection
+// Uses 2GB of memory for ~5 billion entries with ~1% false positive rate
+class BloomFilter {
+public:
+    BloomFilter(size_t size_bytes = 2ULL * 1024 * 1024 * 1024)
+        : bits_(size_bytes * 8, false), num_bits_(size_bytes * 8) {}
+
+    void add(uint64_t value) {
+        for (int i = 0; i < NUM_HASHES; ++i) {
+            size_t idx = hash(value, i) % num_bits_;
+            bits_[idx] = true;
+        }
+    }
+
+    bool maybe_contains(uint64_t value) const {
+        for (int i = 0; i < NUM_HASHES; ++i) {
+            size_t idx = hash(value, i) % num_bits_;
+            if (!bits_[idx]) return false;
+        }
+        return true;
+    }
+
+    void clear() {
+        std::fill(bits_.begin(), bits_.end(), false);
+    }
+
+    size_t memory_bytes() const { return bits_.size() / 8; }
+
+private:
+    static constexpr int NUM_HASHES = 7;
+
+    size_t hash(uint64_t value, int seed) const {
+        // MurmurHash3-style mixing
+        uint64_t h = value ^ (seed * 0x9e3779b97f4a7c15ULL);
+        h ^= h >> 33;
+        h *= 0xff51afd7ed558ccdULL;
+        h ^= h >> 33;
+        h *= 0xc4ceb9fe1a85ec53ULL;
+        h ^= h >> 33;
+        return static_cast<size_t>(h);
+    }
+
+    std::vector<bool> bits_;
+    size_t num_bits_;
+};
 
 // Phases of retrograde solving
 enum class SolvePhaseDB {
@@ -89,6 +136,10 @@ private:
     // Phase 2: Build predecessor graph (stored in separate column family)
     void build_predecessors();
     void build_predecessors_parallel();
+    void build_predecessors_streaming();  // New optimized version
+
+    // Helper: Load packed_to_id mapping into memory for fast lookups
+    void load_packed_to_id_cache();
 
     // Phase 3: Mark terminal states
     void mark_terminals();
@@ -166,6 +217,28 @@ private:
 
     // Thread-safe state creation with concurrent hash map
     std::mutex state_create_mutex_;
+
+    // In-memory cache of packed_to_id for fast lookups during predecessor building
+    // Using sorted vector + binary search instead of unordered_map to save memory
+    // unordered_map: ~40 bytes/entry = 17GB for 430M entries
+    // sorted vector: 12 bytes/entry = 5GB for 430M entries
+    struct PackedIdPair {
+        uint64_t packed;
+        uint32_t id;
+        bool operator<(const PackedIdPair& other) const { return packed < other.packed; }
+    };
+    std::vector<PackedIdPair> packed_to_id_cache_;
+    bool cache_loaded_ = false;
+
+    // Bloom filter for fast duplicate rejection during enumeration
+    std::unique_ptr<BloomFilter> bloom_filter_;
+    bool bloom_loaded_ = false;
+
+    // Load bloom filter from existing states
+    void load_bloom_filter();
+
+    // Batch lookup helper using MultiGet
+    std::vector<int64_t> batch_get_state_ids(const std::vector<uint64_t>& packed_states) const;
 };
 
 } // namespace bobail

@@ -6,6 +6,15 @@
 
 namespace bobail {
 
+// Game variant: affects pawn movement rules
+enum class RulesVariant {
+    FLEXIBLE,  // Pawns can stop anywhere along the ray (original solver)
+    OFFICIAL   // Pawns must move to furthest unoccupied square (BGA rules)
+};
+
+// Current rules variant (set at startup)
+extern RulesVariant g_rules_variant;
+
 // A move consists of:
 // 1. Bobail move (destination square)
 // 2. Pawn move (from square, to square)

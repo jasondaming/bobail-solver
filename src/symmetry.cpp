@@ -69,7 +69,14 @@ std::pair<State, int> canonicalize(const State& s) {
     int best_sym = 0;
     uint64_t best_packed = pack_state(s);
 
-    for (int sym = 1; sym < NUM_SYMMETRIES; ++sym) {
+    // Only use symmetries that preserve the goal rows (0 and 4).
+    // In Bobail, row 0 is White's goal and row 4 is Black's goal.
+    // Only horizontal flip (symmetry 4) preserves these rows.
+    // Rotations and vertical flips would swap the goal semantics.
+    constexpr int valid_symmetries[] = {0, 4};  // identity and horizontal flip only
+
+    for (int sym : valid_symmetries) {
+        if (sym == 0) continue;  // Already have identity as initial best
         State transformed = apply_symmetry(s, sym);
         uint64_t packed = pack_state(transformed);
 

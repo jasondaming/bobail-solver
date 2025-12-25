@@ -67,6 +67,22 @@ if(ROCKSDB_FOUND)
     target_include_directories(retrograde_db PRIVATE include ${ROCKSDB_INCLUDE_DIRS})
     target_link_libraries(retrograde_db PRIVATE bobail_engine ${ROCKSDB_LIBRARIES})
     message(STATUS "Building disk-based retrograde solver with RocksDB")
+
+    # Opening book exporter
+    add_executable(export_book
+        src/retrograde_db.cpp
+        src/export_book.cpp
+    )
+    target_include_directories(export_book PRIVATE include ${ROCKSDB_INCLUDE_DIRS})
+    target_link_libraries(export_book PRIVATE bobail_engine ${ROCKSDB_LIBRARIES})
+
+    # Database lookup tool
+    add_executable(lookup
+        src/retrograde_db.cpp
+        src/lookup.cpp
+    )
+    target_include_directories(lookup PRIVATE include ${ROCKSDB_INCLUDE_DIRS})
+    target_link_libraries(lookup PRIVATE bobail_engine ${ROCKSDB_LIBRARIES})
 else()
     message(WARNING "RocksDB not found - disk-based retrograde solver will not be built")
 endif()
@@ -80,3 +96,10 @@ add_executable(bobail_tests
 )
 target_link_libraries(bobail_tests PRIVATE bobail_engine GTest::gtest_main)
 add_test(NAME bobail_tests COMMAND bobail_tests)
+
+# Solver correctness tests
+add_executable(solver_correctness_tests
+    tests/test_solver_correctness.cpp
+)
+target_link_libraries(solver_correctness_tests PRIVATE bobail_engine GTest::gtest_main)
+add_test(NAME solver_correctness_tests COMMAND solver_correctness_tests)

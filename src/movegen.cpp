@@ -3,6 +3,9 @@
 
 namespace bobail {
 
+// Default to Official rules (max distance) - can be changed at startup
+RulesVariant g_rules_variant = RulesVariant::OFFICIAL;
+
 std::array<std::array<std::vector<int>, 8>, NUM_SQUARES> rays;
 std::array<std::vector<int>, NUM_SQUARES> neighbors;
 
@@ -86,11 +89,26 @@ std::vector<std::pair<int, int>> generate_pawn_moves(uint32_t pawns, uint32_t oc
         remaining &= remaining - 1;
 
         for (int di = 0; di < 8; ++di) {
-            for (int dest : rays[sq][di]) {
-                if (occupied & (1u << dest)) {
-                    break;  // Blocked
+            if (g_rules_variant == RulesVariant::FLEXIBLE) {
+                // Flexible: can stop at any square along the ray
+                for (int dest : rays[sq][di]) {
+                    if (occupied & (1u << dest)) {
+                        break;  // Blocked
+                    }
+                    moves.emplace_back(sq, dest);
                 }
-                moves.emplace_back(sq, dest);
+            } else {
+                // Official: must move to furthest unoccupied square
+                int furthest = -1;
+                for (int dest : rays[sq][di]) {
+                    if (occupied & (1u << dest)) {
+                        break;  // Blocked
+                    }
+                    furthest = dest;
+                }
+                if (furthest >= 0) {
+                    moves.emplace_back(sq, furthest);
+                }
             }
         }
     }

@@ -11,8 +11,8 @@
     --secondary-color: #0f3460;
     --text-color: #eee;
     --text-muted: #888;
-    --white-piece: #16a34a;    /* Green for first player */
-    --black-piece: #dc2626;    /* Red for second player */
+    --green-piece: #16a34a;    /* Green for first player */
+    --red-piece: #dc2626;      /* Red for second player */
     --bobail-color: #fbbf24;   /* Yellow/amber bobail */
     --win-color: #4ade80;
     --draw-color: #facc15;
@@ -216,13 +216,13 @@ main {
 }
 
 /* Green token (first player) */
-.piece.white {
+.piece.green {
     background: linear-gradient(145deg, #22c55e 0%, #16a34a 40%, #15803d 100%);
     border: 3px solid #14532d;
 }
 
 /* Red token (second player) */
-.piece.black {
+.piece.red {
     background: linear-gradient(145deg, #ef4444 0%, #dc2626 40%, #b91c1c 100%);
     border: 3px solid #7f1d1d;
 }
@@ -296,12 +296,12 @@ main {
     box-shadow: 0 2px 8px rgba(0, 0, 0, 0.3);
 }
 
-.turn-dot.white-dot {
+.turn-dot.green-dot {
     background: linear-gradient(145deg, #22c55e, #16a34a);
     border: 2px solid #14532d;
 }
 
-.turn-dot.black-dot {
+.turn-dot.red-dot {
     background: linear-gradient(145deg, #ef4444, #dc2626);
     border: 2px solid #7f1d1d;
 }
@@ -491,6 +491,41 @@ main {
     background: var(--loss-color);
 }
 
+.best-moves {
+    margin-top: 12px;
+    padding: 10px;
+    background: rgba(74, 222, 128, 0.15);
+    border-radius: 6px;
+    font-size: 0.9rem;
+    border: 1px solid rgba(74, 222, 128, 0.3);
+}
+
+.best-moves strong {
+    color: var(--win-color);
+}
+
+/* Hint loading indicator */
+.hint-loading {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    color: var(--text-muted);
+    font-style: italic;
+}
+
+.loading-spinner {
+    width: 16px;
+    height: 16px;
+    border: 2px solid var(--text-muted);
+    border-top-color: var(--primary-color);
+    border-radius: 50%;
+    animation: spin 0.8s linear infinite;
+}
+
+@keyframes spin {
+    to { transform: rotate(360deg); }
+}
+
 /* Setup Panel */
 .setup-panel {
     padding-top: 15px;
@@ -544,11 +579,11 @@ main {
 }
 
 .piece-icon.green {
-    background: var(--white-piece);
+    background: var(--green-piece);
 }
 
 .piece-icon.red {
-    background: var(--black-piece);
+    background: var(--red-piece);
 }
 
 .piece-icon.bobail {

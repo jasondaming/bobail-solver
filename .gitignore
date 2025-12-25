@@ -13,16 +13,23 @@ out/
 *.swo
 *~
 
+# Claude Code
+.claude/
+
 # Compiled files
 *.o
 *.a
 *.so
 *.dylib
 
-# Executables
+# Executables (Linux/Mac)
 bobail_solver
 perft
 bobail_tests
+lookup
+export_book
+fix_phase
+migrate_metadata
 
 # CMake
 CMakeCache.txt
@@ -39,7 +46,17 @@ CURRENT
 LOCK
 OPTIONS-*
 *.db/
+solver_db*/
+
+# Solver data files
+*.ckpt
+opening_book*.json
 
 # OS files
 .DS_Store
 Thumbs.db
+nul
+
+# Temporary files
+temp.txt
+*.tmp

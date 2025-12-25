@@ -16,6 +16,8 @@ void print_usage(const char* prog) {
               << "  --import FILE       Import from old checkpoint file\n"
               << "  --interval N        Save checkpoint every N states (default: 1000000)\n"
               << "  --threads N         Number of threads for parallel processing (default: 1)\n"
+              << "  --official          Use Official rules (pawns must move max distance) [default]\n"
+              << "  --flexible          Use Flexible rules (pawns can stop anywhere)\n"
               << "  --help              Show this help\n";
 }
 
@@ -59,6 +61,10 @@ int main(int argc, char* argv[]) {
                 std::cerr << "Error: --threads requires a number\n";
                 return 1;
             }
+        } else if (std::strcmp(argv[i], "--official") == 0) {
+            bobail::g_rules_variant = bobail::RulesVariant::OFFICIAL;
+        } else if (std::strcmp(argv[i], "--flexible") == 0) {
+            bobail::g_rules_variant = bobail::RulesVariant::FLEXIBLE;
         } else {
             std::cerr << "Unknown option: " << argv[i] << "\n";
             print_usage(argv[0]);
@@ -78,7 +84,12 @@ int main(int argc, char* argv[]) {
     bobail::init_symmetry();
 
     std::cout << "Bobail Strong Solver (Disk-Based Retrograde Analysis)\n";
-    std::cout << "=====================================================\n\n";
+    std::cout << "=====================================================\n";
+    std::cout << "Rules variant: "
+              << (bobail::g_rules_variant == bobail::RulesVariant::OFFICIAL
+                  ? "OFFICIAL (pawns must move max distance)"
+                  : "FLEXIBLE (pawns can stop anywhere)")
+              << "\n\n";
 
     // Show starting position
     auto start = bobail::State::starting_position();
