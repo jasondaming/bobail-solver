@@ -30,6 +30,11 @@ constexpr std::array<Direction, 8> ALL_DIRECTIONS = {
     NORTH_EAST, NORTH_WEST, SOUTH_EAST, SOUTH_WEST
 };
 
+// Orthogonal directions only (for Bobail movement)
+constexpr std::array<Direction, 4> ORTHOGONAL_DIRECTIONS = {
+    NORTH, SOUTH, EAST, WEST
+};
+
 // Game state representation
 // Uses bitboards for efficient manipulation
 struct State {

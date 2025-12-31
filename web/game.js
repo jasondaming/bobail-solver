@@ -22,6 +22,10 @@ const DIFFICULTY = {
     hard: 5
 };
 
+// Solver server configuration
+const SOLVER_URL = 'http://localhost:8081';
+let solverData = null;  // Cached solver response for current position
+
 // Stats tracking
 let stats = {
     wins: 0,
@@ -615,11 +619,29 @@ function alphaBeta(state, depth, alpha, beta, maximizing) {
     }
 }
 
-// AI makes a move using alpha-beta search
-function makeAIMove() {
+// AI makes a move using solver data or alpha-beta search
+async function makeAIMove() {
     if (gameState.gameOver || gameState.animating) return;
 
-    // Convert gameState to search state
+    // Try to use solver data first (perfect play)
+    await fetchSolverData();
+    const solverMove = getSolverBestMove();
+
+    if (solverMove) {
+        // Use solver's move (perfect play)
+        if (gameState.phase === 'bobail') {
+            makeMove(solverMove.bobail_to);
+        }
+        setTimeout(() => {
+            if (gameState.phase === 'pawn' && !gameState.gameOver && !gameState.animating) {
+                gameState.selectedSquare = solverMove.pawn_from;
+                makeMove(solverMove.pawn_to);
+            }
+        }, 350);
+        return;
+    }
+
+    // Fallback to alpha-beta search
     const state = {
         whitePawns: [...gameState.whitePawns],
         blackPawns: [...gameState.blackPawns],
@@ -627,19 +649,15 @@ function makeAIMove() {
         whiteToMove: gameState.whiteToMove
     };
 
-    // Search depth based on difficulty
     const depth = DIFFICULTY[gameState.difficulty] || 3;
     const maximizing = state.whiteToMove;
 
     const result = alphaBeta(state, depth, -Infinity, Infinity, maximizing);
 
     if (result.move) {
-        // Make bobail move
         if (gameState.phase === 'bobail') {
             makeMove(result.move.bobailTo);
         }
-
-        // Make pawn move (after animation completes)
         setTimeout(() => {
             if (gameState.phase === 'pawn' && !gameState.gameOver && !gameState.animating) {
                 gameState.selectedSquare = result.move.pawnFrom;
@@ -685,7 +703,12 @@ function handleSquareClick(sq) {
 }
 
 // Render the board
-function renderBoard() {
+async function renderBoard() {
+    // Fetch solver data if hints enabled
+    if (gameState.hintsEnabled && !gameState.gameOver) {
+        await fetchSolverData();
+    }
+
     const board = document.getElementById('board');
     board.innerHTML = '';
 
@@ -732,14 +755,75 @@ function renderBoard() {
     }
 }
 
-// Get hint for a square (placeholder - will use solved database)
+// Convert current position to solver query format
+function positionToQuery() {
+    // Convert pawn arrays to bitmasks
+    let wp = 0, bp = 0;
+    for (const sq of gameState.whitePawns) wp |= (1 << sq);
+    for (const sq of gameState.blackPawns) bp |= (1 << sq);
+    const stm = gameState.whiteToMove ? 1 : 0;
+    return `${wp.toString(16)},${bp.toString(16)},${gameState.bobailSquare},${stm}`;
+}
+
+// Fetch solver evaluation for current position
+async function fetchSolverData() {
+    try {
+        const query = positionToQuery();
+        const response = await fetch(`${SOLVER_URL}/lookup?pos=${query}`);
+        if (response.ok) {
+            solverData = await response.json();
+            return solverData;
+        }
+    } catch (e) {
+        // Server not available
+    }
+    solverData = null;
+    return null;
+}
+
+// Get hint for a move based on solver data
 function getMoveHint(sq) {
     if (!gameState.validMoves.includes(sq)) return null;
+    if (!solverData || !solverData.moves) return null;
 
-    // Placeholder: random hints for now
-    // Later: look up position in opening book
-    const hints = ['win', 'draw', 'loss'];
-    return hints[Math.floor(Math.random() * hints.length)];
+    // Find the move that ends at this square
+    // For bobail phase: match bobail_to
+    // For pawn phase: match pawn_to with current selection as pawn_from
+    for (const move of solverData.moves) {
+        if (gameState.phase === 'bobail') {
+            if (move.bobail_to === sq) {
+                return move.eval || 'unknown';
+            }
+        } else {
+            // Pawn phase - need to match pawn_from (selected) and pawn_to (sq)
+            if (move.pawn_from === gameState.selectedSquare && move.pawn_to === sq) {
+                return move.eval || 'unknown';
+            }
+        }
+    }
+    return 'unknown';
+}
+
+// Get best move from solver data (for AI)
+function getSolverBestMove() {
+    if (!solverData || !solverData.moves || solverData.moves.length === 0) return null;
+
+    // Look for a move that leads to loss for opponent (win for us)
+    // In PNS: if we're winning, opponent's position after our move should be "loss"
+    for (const move of solverData.moves) {
+        if (move.eval === 'loss') {
+            return move;  // This move leads to opponent losing = good for us
+        }
+    }
+
+    // If no winning move found, try to avoid losses
+    const nonLossMoves = solverData.moves.filter(m => m.eval !== 'win');
+    if (nonLossMoves.length > 0) {
+        return nonLossMoves[Math.floor(Math.random() * nonLossMoves.length)];
+    }
+
+    // Fallback to any move
+    return solverData.moves[0];
 }
 
 // Update UI elements
@@ -758,10 +842,19 @@ function updateUI() {
     turnDot.className = 'turn-dot';
     turnDot.classList.add(gameState.whiteToMove ? 'white-dot' : 'black-dot');
 
-    // Evaluation (placeholder)
+    // Evaluation from solver
     const evalValue = document.getElementById('eval-value');
-    evalValue.textContent = '--';
-    evalValue.className = 'eval-value';
+    if (solverData && solverData.result) {
+        const result = solverData.result.toUpperCase();
+        evalValue.textContent = result;
+        evalValue.className = 'eval-value';
+        if (result === 'WIN') evalValue.classList.add('eval-win');
+        else if (result === 'LOSS') evalValue.classList.add('eval-loss');
+        else if (result === 'DRAW') evalValue.classList.add('eval-draw');
+    } else {
+        evalValue.textContent = '--';
+        evalValue.className = 'eval-value';
+    }
 
     // Hint legend visibility
     const hintLegend = document.getElementById('hint-legend');
@@ -992,7 +1085,11 @@ document.addEventListener('DOMContentLoaded', () => {
     // Player color select
     document.getElementById('player-color').addEventListener('change', (e) => {
         gameState.playerColor = e.target.value;
-        initGame();
+        // Don't reset, just update and check if AI should move
+        renderBoard();
+        if (shouldAIMove()) {
+            setTimeout(makeAIMove, 500);
+        }
     });
 
     // Difficulty select

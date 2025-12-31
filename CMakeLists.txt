@@ -5,11 +5,15 @@ set(CMAKE_CXX_STANDARD 20)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 set(CMAKE_EXPORT_COMPILE_COMMANDS ON)
 
+option(BOBAIL_BUILD_TESTS "Build test targets" OFF)
+
 # Compiler warnings
 add_compile_options(-Wall -Wextra -Wpedantic)
 
 # Find dependencies
-find_package(GTest REQUIRED)
+if(BOBAIL_BUILD_TESTS)
+    find_package(GTest REQUIRED)
+endif()
 
 # RocksDB - try pkg-config first, then direct library search
 find_package(PkgConfig)
@@ -68,6 +72,13 @@ if(ROCKSDB_FOUND)
     target_link_libraries(retrograde_db PRIVATE bobail_engine ${ROCKSDB_LIBRARIES})
     message(STATUS "Building disk-based retrograde solver with RocksDB")
 
+    # Practical playing engine with PNS data
+    add_executable(bobail_play
+        src/engine.cpp
+    )
+    target_include_directories(bobail_play PRIVATE include)
+    target_link_libraries(bobail_play PRIVATE bobail_engine)
+
     # Opening book exporter
     add_executable(export_book
         src/retrograde_db.cpp
@@ -83,23 +94,86 @@ if(ROCKSDB_FOUND)
     )
     target_include_directories(lookup PRIVATE include ${ROCKSDB_INCLUDE_DIRS})
     target_link_libraries(lookup PRIVATE bobail_engine ${ROCKSDB_LIBRARIES})
+
+    # Endgame analysis tool
+    add_executable(analyze_endgames
+        src/retrograde_db.cpp
+        src/analyze_endgames.cpp
+    )
+    target_include_directories(analyze_endgames PRIVATE include ${ROCKSDB_INCLUDE_DIRS})
+    target_link_libraries(analyze_endgames PRIVATE bobail_engine ${ROCKSDB_LIBRARIES})
+
+    # Enhanced PNS solver with checkpoint and retrograde DB integration
+    add_executable(pns_enhanced
+        src/retrograde_db.cpp
+        src/pns_enhanced.cpp
+    )
+    target_include_directories(pns_enhanced PRIVATE include ${ROCKSDB_INCLUDE_DIRS})
+    target_link_libraries(pns_enhanced PRIVATE bobail_engine ${ROCKSDB_LIBRARIES})
+
+    # Verification tool for PNS results
+    add_executable(verify_wins
+        src/verify_wins.cpp
+    )
+    target_include_directories(verify_wins PRIVATE include)
+    target_link_libraries(verify_wins PRIVATE bobail_engine)
+
+    # Trace winning lines
+    add_executable(trace_win
+        src/trace_win.cpp
+    )
+    target_include_directories(trace_win PRIVATE include)
+    target_link_libraries(trace_win PRIVATE bobail_engine)
+
+    add_executable(trace_alt
+        src/trace_alt.cpp
+    )
+    target_include_directories(trace_alt PRIVATE include)
+    target_link_libraries(trace_alt PRIVATE bobail_engine)
+
+    add_executable(verify_all_responses
+        src/verify_all_responses.cpp
+    )
+    target_include_directories(verify_all_responses PRIVATE include)
+    target_link_libraries(verify_all_responses PRIVATE bobail_engine)
+
+    # Position visualization URL generator
+    add_executable(visualize
+        src/visualize.cpp
+    )
+    target_include_directories(visualize PRIVATE include)
+    target_link_libraries(visualize PRIVATE bobail_engine)
+
+    # Export proved positions from PNS checkpoint
+    add_executable(pns_export
+        src/pns_export.cpp
+    )
+    target_include_directories(pns_export PRIVATE include)
+    target_link_libraries(pns_export PRIVATE bobail_engine)
+
+    # PNS checkpoint lookup tool
+    add_executable(pns_lookup
+        src/pns_lookup.cpp
+    )
+    target_include_directories(pns_lookup PRIVATE include)
+    target_link_libraries(pns_lookup PRIVATE bobail_engine)
 else()
     message(WARNING "RocksDB not found - disk-based retrograde solver will not be built")
 endif()
 
-# Tests
-enable_testing()
-add_executable(bobail_tests
-    tests/test_board.cpp
-    tests/test_movegen.cpp
-    tests/test_symmetry.cpp
-)
-target_link_libraries(bobail_tests PRIVATE bobail_engine GTest::gtest_main)
-add_test(NAME bobail_tests COMMAND bobail_tests)
+if(BOBAIL_BUILD_TESTS)
+    enable_testing()
+    add_executable(bobail_tests
+        tests/test_board.cpp
+        tests/test_movegen.cpp
+        tests/test_symmetry.cpp
+    )
+    target_link_libraries(bobail_tests PRIVATE bobail_engine GTest::gtest_main)
+    add_test(NAME bobail_tests COMMAND bobail_tests)
 
-# Solver correctness tests
-add_executable(solver_correctness_tests
-    tests/test_solver_correctness.cpp
-)
-target_link_libraries(solver_correctness_tests PRIVATE bobail_engine GTest::gtest_main)
-add_test(NAME solver_correctness_tests COMMAND solver_correctness_tests)
+    add_executable(solver_correctness_tests
+        tests/test_solver_correctness.cpp
+    )
+    target_link_libraries(solver_correctness_tests PRIVATE bobail_engine GTest::gtest_main)
+    add_test(NAME solver_correctness_tests COMMAND solver_correctness_tests)
+endif()

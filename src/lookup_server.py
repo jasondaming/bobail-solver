@@ -21,6 +21,9 @@ import os
 LOOKUP_PATH = "./build/lookup"
 DB_PATH = ""
 RULES = "official"
+USE_PNS = False
+PNS_LOOKUP_PATH = "./build/pns_lookup"
+PNS_CHECKPOINT = ""
 
 class LookupHandler(BaseHTTPRequestHandler):
     def do_GET(self):
@@ -42,6 +45,23 @@ class LookupHandler(BaseHTTPRequestHandler):
 
             # Call the lookup tool
             try:
+                if USE_PNS:
+                    # Use PNS checkpoint lookup
+                    result = subprocess.run(
+                        [PNS_LOOKUP_PATH, "--checkpoint", PNS_CHECKPOINT, "--query", pos, "--json"],
+                        capture_output=True,
+                        text=True,
+                        timeout=5
+                    )
+                    # PNS lookup returns JSON directly
+                    try:
+                        response = json.loads(result.stdout)
+                        self.wfile.write(json.dumps(response).encode())
+                        return
+                    except json.JSONDecodeError:
+                        self.wfile.write(json.dumps({"error": "Parse error", "raw": result.stdout}).encode())
+                        return
+
                 rules_flag = "--official" if RULES == "official" else "--flexible"
                 result = subprocess.run(
                     [LOOKUP_PATH, "--db", DB_PATH, rules_flag, "--query", pos],
@@ -146,22 +166,34 @@ class LookupHandler(BaseHTTPRequestHandler):
         pass
 
 def main():
-    global DB_PATH, RULES, LOOKUP_PATH
+    global DB_PATH, RULES, LOOKUP_PATH, USE_PNS, PNS_LOOKUP_PATH, PNS_CHECKPOINT
 
     parser = argparse.ArgumentParser(description='Bobail lookup server')
-    parser.add_argument('--db', required=True, help='Path to solver database')
+    parser.add_argument('--db', help='Path to solver database (for retrograde mode)')
     parser.add_argument('--rules', choices=['official', 'flexible'], default='official')
     parser.add_argument('--port', type=int, default=8080)
     parser.add_argument('--lookup', default='./build/lookup', help='Path to lookup binary')
+    parser.add_argument('--pns', help='Path to PNS checkpoint (enables PNS mode)')
+    parser.add_argument('--pns-lookup', default='./build/pns_lookup', help='Path to pns_lookup binary')
     args = parser.parse_args()
 
-    DB_PATH = args.db
-    RULES = args.rules
-    LOOKUP_PATH = args.lookup
+    if args.pns:
+        USE_PNS = True
+        PNS_CHECKPOINT = args.pns
+        PNS_LOOKUP_PATH = args.pns_lookup
+        print(f"Starting Bobail PNS lookup server...")
+        print(f"  PNS Checkpoint: {PNS_CHECKPOINT}")
+    elif args.db:
+        DB_PATH = args.db
+        RULES = args.rules
+        LOOKUP_PATH = args.lookup
+        print(f"Starting Bobail retrograde lookup server...")
+        print(f"  Database: {DB_PATH}")
+        print(f"  Rules: {RULES}")
+    else:
+        print("Error: Must specify either --db or --pns")
+        return
 
-    print(f"Starting Bobail lookup server...")
-    print(f"  Database: {DB_PATH}")
-    print(f"  Rules: {RULES}")
     print(f"  Port: {args.port}")
     print(f"\nTest URL: http://localhost:{args.port}/lookup?pos=1f,1f00000,12,1")
     print("Press Ctrl+C to stop\n")
