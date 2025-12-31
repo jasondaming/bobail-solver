@@ -1060,21 +1060,38 @@ async function doAIMovePerfect() {
         }
     }
 
-    // Evaluate all moves in parallel for speed
-    const evalPromises = moveList.map(async (move) => {
-        const result = await lookupPosition(move.afterState);
-        if (!result || result.result === 'unknown') {
+    // Evaluate moves with a timeout to prevent hanging
+    console.log(`Perfect AI evaluating ${moveList.length} moves...`);
+
+    const evalWithTimeout = async (move) => {
+        try {
+            const result = await lookupPosition(move.afterState);
+            if (!result || result.result === 'unknown') {
+                return { ...move, eval: 'unknown' };
+            }
+            let evalForUs;
+            if (result.result === 'win') evalForUs = 'loss';
+            else if (result.result === 'loss') evalForUs = 'win';
+            else evalForUs = 'draw';
+            return { ...move, eval: evalForUs };
+        } catch (e) {
             return { ...move, eval: 'unknown' };
         }
-        // Flip perspective: result is from opponent's view
-        let evalForUs;
-        if (result.result === 'win') evalForUs = 'loss';
-        else if (result.result === 'loss') evalForUs = 'win';
-        else evalForUs = 'draw';
-        return { ...move, eval: evalForUs };
-    });
+    };
 
-    const allMoves = await Promise.all(evalPromises);
+    // Add overall timeout - if evaluation takes too long, just pick randomly
+    let allMoves;
+    try {
+        const timeoutPromise = new Promise((_, reject) =>
+            setTimeout(() => reject(new Error('timeout')), 5000));
+        allMoves = await Promise.race([
+            Promise.all(moveList.map(evalWithTimeout)),
+            timeoutPromise
+        ]);
+    } catch (e) {
+        console.log('Perfect AI evaluation timed out, picking random move');
+        allMoves = moveList.map(m => ({ ...m, eval: 'unknown' }));
+    }
 
     // Count evaluations for debugging
     const counts = { win: 0, draw: 0, loss: 0, unknown: 0 };
@@ -1292,14 +1309,22 @@ async function lookupPosition(state) {
     }
 
     try {
-        const response = await fetch(`${SOLVER_SERVER}/lookup?pos=${pos}`);
+        const controller = new AbortController();
+        const timeout = setTimeout(() => controller.abort(), 3000); // 3s timeout
+
+        const response = await fetch(`${SOLVER_SERVER}/lookup?pos=${pos}`, {
+            signal: controller.signal
+        });
+        clearTimeout(timeout);
+
         if (!response.ok) return null;
 
         const data = await response.json();
         solverCache.set(pos, data);
         return data;
     } catch (e) {
-        // Server not available - return null
+        // Server not available or timeout - return null
+        console.log('Solver lookup failed:', e.message);
         return null;
     }
 }
