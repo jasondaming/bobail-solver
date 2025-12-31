@@ -1873,6 +1873,7 @@ function loadFromURL() {
             gameState.bobailSquare = state.bobailSquare;
             gameState.greenToMove = state.greenToMove;
             gameState.phase = state.phase;
+            gameState.isFirstMove = false; // Loaded positions are never first move
             gameState.playerColor = 'both'; // Analysis mode for shared positions
             // Set difficulty to impossible (perfect solver) for testing solver positions
             gameState.difficulty = 'impossible';
