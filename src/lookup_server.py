@@ -16,6 +16,8 @@ import argparse
 from http.server import HTTPServer, BaseHTTPRequestHandler
 from urllib.parse import urlparse, parse_qs
 import os
+import threading
+import sys
 
 # Global config
 LOOKUP_PATH = "./build/lookup"
@@ -24,6 +26,51 @@ RULES = "official"
 USE_PNS = False
 PNS_LOOKUP_PATH = "./build/pns_lookup"
 PNS_CHECKPOINT = ""
+
+# Persistent PNS lookup process
+pns_process = None
+pns_lock = threading.Lock()
+
+def start_pns_process():
+    """Start the persistent pns_lookup process in interactive mode"""
+    global pns_process
+    print("Starting persistent PNS lookup process...", flush=True)
+    pns_process = subprocess.Popen(
+        [PNS_LOOKUP_PATH, "--checkpoint", PNS_CHECKPOINT, "--interactive", "--json"],
+        stdin=subprocess.PIPE,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        text=True,
+        bufsize=1  # Line buffered
+    )
+    # Wait for it to load by reading stderr until we see "Loaded"
+    while True:
+        line = pns_process.stderr.readline()
+        if not line:
+            break
+        print(f"  {line.strip()}", flush=True)
+        if "Loaded" in line:
+            break
+    print("PNS lookup process ready!", flush=True)
+
+def query_pns(pos):
+    """Query the persistent PNS process"""
+    global pns_process
+    with pns_lock:
+        if pns_process is None or pns_process.poll() is not None:
+            # Process died, restart it
+            start_pns_process()
+
+        # Send query
+        pns_process.stdin.write(pos + "\n")
+        pns_process.stdin.flush()
+
+        # Read response (JSON on one line, then blank line)
+        response = pns_process.stdout.readline().strip()
+        # Skip the blank line that follows
+        pns_process.stdout.readline()
+
+        return response
 
 class LookupHandler(BaseHTTPRequestHandler):
     def do_GET(self):
@@ -46,20 +93,14 @@ class LookupHandler(BaseHTTPRequestHandler):
             # Call the lookup tool
             try:
                 if USE_PNS:
-                    # Use PNS checkpoint lookup
-                    result = subprocess.run(
-                        [PNS_LOOKUP_PATH, "--checkpoint", PNS_CHECKPOINT, "--query", pos, "--json"],
-                        capture_output=True,
-                        text=True,
-                        timeout=5
-                    )
-                    # PNS lookup returns JSON directly
+                    # Use persistent PNS lookup process
                     try:
-                        response = json.loads(result.stdout)
+                        response_str = query_pns(pos)
+                        response = json.loads(response_str)
                         self.wfile.write(json.dumps(response).encode())
                         return
-                    except json.JSONDecodeError:
-                        self.wfile.write(json.dumps({"error": "Parse error", "raw": result.stdout}).encode())
+                    except json.JSONDecodeError as e:
+                        self.wfile.write(json.dumps({"error": "Parse error", "raw": str(e)}).encode())
                         return
 
                 rules_flag = "--official" if RULES == "official" else "--flexible"
@@ -183,6 +224,8 @@ def main():
         PNS_LOOKUP_PATH = args.pns_lookup
         print(f"Starting Bobail PNS lookup server...")
         print(f"  PNS Checkpoint: {PNS_CHECKPOINT}")
+        # Start the persistent PNS lookup process
+        start_pns_process()
     elif args.db:
         DB_PATH = args.db
         RULES = args.rules
