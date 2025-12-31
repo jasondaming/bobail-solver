@@ -1113,17 +1113,31 @@ async function doAIMovePerfect() {
 
     if (bestMove) {
         // Make bobail move
+        console.log('Making bobail move to:', bestMove.bobailTo);
         if (gameState.phase === 'bobail') {
             makeMove(bestMove.bobailTo);
         }
 
         // Make pawn move (after animation completes)
         setTimeout(() => {
+            console.log('Pawn move timeout fired. State:', {
+                phase: gameState.phase,
+                gameOver: gameState.gameOver,
+                animating: gameState.animating,
+                shouldAI: shouldAIMove(),
+                pawnFrom: bestMove.pawnFrom,
+                pawnTo: bestMove.pawnTo
+            });
             if (gameState.phase === 'pawn' && !gameState.gameOver && !gameState.animating && shouldAIMove()) {
                 gameState.selectedSquare = bestMove.pawnFrom;
+                console.log('Making pawn move from', bestMove.pawnFrom, 'to', bestMove.pawnTo);
                 makeMove(bestMove.pawnTo);
+            } else {
+                console.log('Pawn move conditions not met!');
             }
         }, 350);
+    } else {
+        console.log('No best move found!');
     }
 
     setThinking(false);
@@ -1946,11 +1960,14 @@ document.addEventListener('DOMContentLoaded', () => {
 
     // Player color select
     document.getElementById('player-color').addEventListener('change', (e) => {
+        console.log('Player color changed to:', e.target.value);
         gameState.playerColor = e.target.value;
         // Don't reset game, just update and check if AI should move
         renderBoard();
         updateUI();
+        console.log('shouldAIMove:', shouldAIMove(), 'greenToMove:', gameState.greenToMove);
         if (shouldAIMove()) {
+            console.log('Triggering AI move in 500ms');
             setTimeout(makeAIMove, 500);
         }
     });
