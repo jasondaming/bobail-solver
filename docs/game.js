@@ -15,16 +15,13 @@ const DIRECTIONS = [
     [1, -1]   // SW
 ];
 
-// Difficulty settings (search depth)
+// Difficulty settings (search depth, or 'perfect' for solver)
 const DIFFICULTY = {
     easy: 1,
     medium: 3,
-    hard: 5
+    hard: 5,
+    impossible: 'perfect'  // Uses perfect solver database
 };
-
-// Solver server configuration
-const SOLVER_URL = 'http://localhost:8081';
-let solverData = null;  // Cached solver response for current position
 
 // Stats tracking
 let stats = {
@@ -32,6 +29,14 @@ let stats = {
     losses: 0,
     draws: 0
 };
+
+// Game history - stores completed games
+let gameHistory = [];
+
+// Hint system state (declared early for use in makeMove)
+let pendingHints = new Map();
+let hintRequestPending = false;
+let currentPositionEval = null;
 
 // Sound effects
 const sounds = {
@@ -43,20 +48,25 @@ const sounds = {
 
 // Game state
 let gameState = {
-    whitePawns: [],      // Array of square indices
-    blackPawns: [],      // Array of square indices
+    greenPawns: [],      // Array of square indices (first player)
+    redPawns: [],        // Array of square indices (second player)
     bobailSquare: 12,    // Center square
-    whiteToMove: true,
+    greenToMove: true,   // Green moves first
     phase: 'bobail',     // 'bobail' or 'pawn'
     selectedSquare: null,
     validMoves: [],
     moveHistory: [],
     hintsEnabled: false,
-    playerColor: 'white', // 'white', 'black', or 'both'
+    playerColor: 'green', // 'green', 'red', or 'both'
     gameOver: false,
-    winner: null,
+    winner: null,        // 'green', 'red', or null
     difficulty: 'medium',
-    animating: false
+    animating: false,
+    setupMode: false,         // Board setup mode
+    setupPiece: 'green',      // Which piece type to place: 'green', 'red', 'bobail', 'clear'
+    aiThinking: false,        // AI is computing a move
+    replayMode: false,        // Viewing historical position
+    replayIndex: 0            // Current position in replay (0 = start, moveHistory.length = current)
 };
 
 // Load stats from localStorage
@@ -70,6 +80,116 @@ function loadStats() {
 // Save stats to localStorage
 function saveStats() {
     localStorage.setItem('bobail-stats', JSON.stringify(stats));
+}
+
+// Load game history from localStorage
+function loadGameHistory() {
+    const saved = localStorage.getItem('bobail-game-history');
+    if (saved) {
+        gameHistory = JSON.parse(saved);
+    }
+}
+
+// Save game history to localStorage
+function saveGameHistory() {
+    // Keep only the last 20 games
+    if (gameHistory.length > 20) {
+        gameHistory = gameHistory.slice(-20);
+    }
+    localStorage.setItem('bobail-game-history', JSON.stringify(gameHistory));
+}
+
+// Save current game to history
+function saveGameToHistory() {
+    if (gameState.moveHistory.length === 0) return;
+
+    const game = {
+        id: Date.now(),
+        date: new Date().toLocaleDateString(),
+        time: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
+        moves: [...gameState.moveHistory],
+        winner: gameState.winner,
+        playerColor: gameState.playerColor,
+        moveCount: Math.ceil(gameState.moveHistory.length / 2)
+    };
+
+    gameHistory.push(game);
+    saveGameHistory();
+    updateGameHistoryDisplay();
+}
+
+// Load a saved game for review
+function loadGameForReview(gameId) {
+    const game = gameHistory.find(g => g.id === gameId);
+    if (!game) return;
+
+    // Reset to starting position
+    gameState.greenPawns = [0, 1, 2, 3, 4];
+    gameState.redPawns = [20, 21, 22, 23, 24];
+    gameState.bobailSquare = 12;
+    gameState.greenToMove = true;
+    gameState.phase = 'pawn';
+    gameState.moveHistory = [...game.moves];
+    gameState.gameOver = game.winner !== null;
+    gameState.winner = game.winner;
+    gameState.playerColor = 'both'; // Review mode
+    gameState.selectedSquare = null;
+    gameState.validMoves = [];
+    gameState.replayMode = true;
+    gameState.replayIndex = 0;
+    gameState.isFirstMove = false;
+
+    hideGameOverOverlay();
+    renderBoard();
+    updateUI();
+    showToast(`Loaded game from ${game.date}`);
+}
+
+// Delete a game from history
+function deleteGameFromHistory(gameId) {
+    gameHistory = gameHistory.filter(g => g.id !== gameId);
+    saveGameHistory();
+    updateGameHistoryDisplay();
+}
+
+// Update game history display
+function updateGameHistoryDisplay() {
+    const historyList = document.getElementById('game-history-list');
+    if (!historyList) return;
+
+    historyList.innerHTML = '';
+
+    if (gameHistory.length === 0) {
+        historyList.innerHTML = '<div class="no-games">No saved games</div>';
+        return;
+    }
+
+    // Show games in reverse order (newest first)
+    [...gameHistory].reverse().forEach(game => {
+        const entry = document.createElement('div');
+        entry.className = 'game-history-entry';
+
+        const resultClass = game.winner === game.playerColor ? 'win' :
+                           game.winner && game.winner !== game.playerColor ? 'loss' : 'draw';
+        const resultText = game.winner === 'green' ? 'G wins' :
+                          game.winner === 'red' ? 'R wins' : 'Draw';
+
+        entry.innerHTML = `
+            <div class="game-info-row">
+                <span class="game-date">${game.date} ${game.time}</span>
+                <span class="game-result ${resultClass}">${resultText}</span>
+            </div>
+            <div class="game-details">
+                ${game.moveCount} moves
+            </div>
+            <div class="game-actions">
+                <button class="btn btn-small" onclick="loadGameForReview(${game.id})">Review</button>
+                <button class="btn btn-small btn-secondary" onclick="deleteGameFromHistory(${game.id})">Delete</button>
+            </div>
+        `;
+
+        historyList.appendChild(entry);
+    });
 }
 
 // Initialize sound effects
@@ -109,12 +229,13 @@ function initSounds() {
 
 // Initialize starting position
 function initGame() {
+    // First player always skips bobail move on turn 1 (core Bobail rule)
     gameState = {
-        whitePawns: [0, 1, 2, 3, 4],      // Top row (White's home is row 0)
-        blackPawns: [20, 21, 22, 23, 24], // Bottom row (Black's home is row 4)
+        greenPawns: [0, 1, 2, 3, 4],      // Row 0 (Green's home row)
+        redPawns: [20, 21, 22, 23, 24], // Row 4 (Red's home row)
         bobailSquare: 12,
-        whiteToMove: true,
-        phase: 'bobail',
+        greenToMove: true,
+        phase: 'pawn', // First turn always skips bobail move
         selectedSquare: null,
         validMoves: [],
         moveHistory: [],
@@ -123,11 +244,33 @@ function initGame() {
         gameOver: false,
         winner: null,
         difficulty: gameState.difficulty,
-        animating: false
+        animating: false,
+        isFirstMove: true,  // Track if this is the very first move
+        replayMode: false,
+        replayIndex: 0
     };
+    // Auto-select bobail if it's player's turn in bobail phase
+    if (!gameState.gameOver && gameState.phase === 'bobail' && !shouldAIMove()) {
+        gameState.selectedSquare = gameState.bobailSquare;
+        gameState.validMoves = getBobailMoves();
+    }
+
+    // Clear pending hints from previous game
+    pendingHints.clear();
+
     renderBoard();
     updateUI();
+
+    // Request hints if enabled and player's turn
+    if (gameState.hintsEnabled && !shouldAIMove()) {
+        requestHints();
+    }
     updateStatsDisplay();
+
+    // If playing as Red, AI (Green) moves first
+    if (shouldAIMove()) {
+        setTimeout(makeAIMove, 500);
+    }
 }
 
 // Convert between row/col and square index
@@ -147,8 +290,8 @@ function isValidSquare(row, col) {
 // Get piece at square
 function getPieceAt(sq) {
     if (sq === gameState.bobailSquare) return 'bobail';
-    if (gameState.whitePawns.includes(sq)) return 'white';
-    if (gameState.blackPawns.includes(sq)) return 'black';
+    if (gameState.greenPawns.includes(sq)) return 'green';
+    if (gameState.redPawns.includes(sq)) return 'red';
     return null;
 }
 
@@ -183,13 +326,54 @@ function getPawnMoves(sq) {
     for (const [dr, dc] of DIRECTIONS) {
         let newRow = row + dr;
         let newCol = col + dc;
+        let lastValidSq = null;
 
         while (isValidSquare(newRow, newCol)) {
             const newSq = toSquare(newRow, newCol);
             if (isOccupied(newSq)) break;
-            moves.push(newSq);
+
+            // Official rules: must move as far as possible
+            lastValidSq = newSq;
             newRow += dr;
             newCol += dc;
+        }
+
+        if (lastValidSq !== null) {
+            moves.push(lastValidSq);
+        }
+    }
+    return moves;
+}
+
+// Get pawn moves from a specific square using a custom state (for hint evaluation)
+function getPawnMovesFrom(sq, state) {
+    const moves = [];
+    const [row, col] = toRowCol(sq);
+
+    // Build occupied set from the custom state
+    const occupied = new Set([
+        ...state.greenPawns,
+        ...state.redPawns,
+        state.bobailSquare
+    ]);
+
+    for (const [dr, dc] of DIRECTIONS) {
+        let newRow = row + dr;
+        let newCol = col + dc;
+        let lastValidSq = null;
+
+        while (isValidSquare(newRow, newCol)) {
+            const newSq = toSquare(newRow, newCol);
+            if (occupied.has(newSq)) break;
+
+            // Official rules: must move as far as possible
+            lastValidSq = newSq;
+            newRow += dr;
+            newCol += dc;
+        }
+
+        if (lastValidSq !== null) {
+            moves.push(lastValidSq);
         }
     }
     return moves;
@@ -210,7 +394,7 @@ function getValidMoves() {
 
 // Get all pieces that can move in pawn phase
 function getMovablePawns() {
-    const pawns = gameState.whiteToMove ? gameState.whitePawns : gameState.blackPawns;
+    const pawns = gameState.greenToMove ? gameState.greenPawns : gameState.redPawns;
     return pawns.filter(sq => getPawnMoves(sq).length > 0);
 }
 
@@ -218,21 +402,22 @@ function getMovablePawns() {
 function checkGameOver() {
     const bobailRow = Math.floor(gameState.bobailSquare / BOARD_SIZE);
 
-    // Bobail on White's home row (row 0) = White wins
+    // Bobail on Green's home row (row 0) = Green wins
     if (bobailRow === 0) {
-        return { over: true, winner: 'white' };
+        return { over: true, winner: 'green' };
     }
 
-    // Bobail on Black's home row (row 4) = Black wins
+    // Bobail on Red's home row (row 4) = Red wins
     if (bobailRow === BOARD_SIZE - 1) {
-        return { over: true, winner: 'black' };
+        return { over: true, winner: 'red' };
     }
 
-    // Check if Bobail is trapped (can't move on opponent's turn)
+    // Check if Bobail is trapped (can't move)
     // This happens at the start of a turn (bobail phase)
+    // The player who TRAPPED the bobail wins (the opponent of current player)
     if (gameState.phase === 'bobail' && getBobailMoves().length === 0) {
-        // Current player wins because opponent trapped the bobail
-        return { over: true, winner: gameState.whiteToMove ? 'white' : 'black' };
+        // Opponent wins because they trapped the bobail
+        return { over: true, winner: gameState.greenToMove ? 'red' : 'green' };
     }
 
     return { over: false, winner: null };
@@ -297,7 +482,12 @@ function animateMove(fromSq, toSq, pieceType, callback) {
 // Make a move
 function makeMove(toSquare, animate = true) {
     const fromSquare = gameState.phase === 'bobail' ? gameState.bobailSquare : gameState.selectedSquare;
-    const pieceType = gameState.phase === 'bobail' ? 'bobail' : (gameState.whiteToMove ? 'white' : 'black');
+    const pieceType = gameState.phase === 'bobail' ? 'bobail' : (gameState.greenToMove ? 'green' : 'red');
+
+    // Clear hints when making a move - they'll be refreshed when needed
+    pendingHints.clear();
+    currentPositionEval = null;
+    resetHintLegend();
 
     const doMove = () => {
         if (gameState.phase === 'bobail') {
@@ -307,14 +497,14 @@ function makeMove(toSquare, animate = true) {
                 type: 'bobail',
                 from: fromSquare,
                 to: toSquare,
-                whiteToMove: gameState.whiteToMove
+                greenToMove: gameState.greenToMove
             });
             gameState.phase = 'pawn';
             gameState.selectedSquare = null;
             gameState.validMoves = [];
         } else {
             // Move pawn
-            const pawns = gameState.whiteToMove ? gameState.whitePawns : gameState.blackPawns;
+            const pawns = gameState.greenToMove ? gameState.greenPawns : gameState.redPawns;
             const idx = pawns.indexOf(fromSquare);
             pawns[idx] = toSquare;
 
@@ -322,14 +512,15 @@ function makeMove(toSquare, animate = true) {
                 type: 'pawn',
                 from: fromSquare,
                 to: toSquare,
-                whiteToMove: gameState.whiteToMove
+                greenToMove: gameState.greenToMove
             });
 
             // End turn
-            gameState.whiteToMove = !gameState.whiteToMove;
+            gameState.greenToMove = !gameState.greenToMove;
             gameState.phase = 'bobail';
             gameState.selectedSquare = null;
             gameState.validMoves = [];
+            gameState.isFirstMove = false;  // First move is complete
         }
 
         // Check for game over
@@ -341,11 +532,23 @@ function makeMove(toSquare, animate = true) {
             updateStats(result.winner);
         }
 
+        // Auto-select bobail at start of player's turn (bobail phase)
+        if (!gameState.gameOver && gameState.phase === 'bobail' && !shouldAIMove()) {
+            gameState.selectedSquare = gameState.bobailSquare;
+            gameState.validMoves = getBobailMoves();
+        }
+
         renderBoard();
         updateUI();
 
-        // AI move if needed
-        if (!gameState.gameOver && shouldAIMove()) {
+        // Request hints for auto-selected bobail
+        if (!gameState.gameOver && gameState.phase === 'bobail' && !shouldAIMove() && gameState.hintsEnabled) {
+            requestHints();
+        }
+
+        // AI move if needed - but only after a complete turn (back to bobail phase)
+        // This prevents double-triggering when AI is mid-turn
+        if (!gameState.gameOver && gameState.phase === 'bobail' && shouldAIMove()) {
             setTimeout(makeAIMove, 400);
         }
     };
@@ -359,6 +562,9 @@ function makeMove(toSquare, animate = true) {
 
 // Update stats after game over
 function updateStats(winner) {
+    // Save game to history (for all game types)
+    saveGameToHistory();
+
     if (gameState.playerColor === 'both') return;
 
     const playerWon = (gameState.playerColor === winner);
@@ -398,7 +604,7 @@ function undoMove() {
         if (gameState.moveHistory.length >= 2) {
             // Undo pawn
             const pawnMove = gameState.moveHistory.pop();
-            const pawns = pawnMove.whiteToMove ? gameState.whitePawns : gameState.blackPawns;
+            const pawns = pawnMove.greenToMove ? gameState.greenPawns : gameState.redPawns;
             const idx = pawns.indexOf(pawnMove.to);
             pawns[idx] = pawnMove.from;
 
@@ -406,7 +612,7 @@ function undoMove() {
             const bobailMove = gameState.moveHistory.pop();
             gameState.bobailSquare = bobailMove.from;
 
-            gameState.whiteToMove = pawnMove.whiteToMove;
+            gameState.greenToMove = pawnMove.greenToMove;
         } else if (gameState.moveHistory.length === 1) {
             // Only one move (bobail), undo it
             const lastMove = gameState.moveHistory.pop();
@@ -425,42 +631,138 @@ function undoMove() {
 
 // Check if AI should move
 function shouldAIMove() {
+    if (gameState.replayMode) return false; // Don't move during replay
     if (gameState.playerColor === 'both') return false;
-    if (gameState.playerColor === 'white' && !gameState.whiteToMove) return true;
-    if (gameState.playerColor === 'black' && gameState.whiteToMove) return true;
+    if (gameState.playerColor === 'green' && !gameState.greenToMove) return true;
+    if (gameState.playerColor === 'red' && gameState.greenToMove) return true;
     return false;
+}
+
+// ==================== Replay Navigation ====================
+
+// Get position at a specific move index (reconstructs from starting position)
+function getPositionAtMove(moveIndex) {
+    // Start from initial position
+    const pos = {
+        greenPawns: [0, 1, 2, 3, 4],
+        redPawns: [20, 21, 22, 23, 24],
+        bobailSquare: 12,
+        greenToMove: true,
+        phase: 'pawn' // First move is pawn only
+    };
+
+    // Apply moves up to the given index
+    for (let i = 0; i < moveIndex && i < gameState.moveHistory.length; i++) {
+        const move = gameState.moveHistory[i];
+
+        if (move.type === 'bobail') {
+            pos.bobailSquare = move.to;
+            pos.phase = 'pawn';
+        } else if (move.type === 'pawn') {
+            const pawns = move.greenToMove ? pos.greenPawns : pos.redPawns;
+            const idx = pawns.indexOf(move.from);
+            if (idx >= 0) {
+                pawns[idx] = move.to;
+            }
+            pos.greenToMove = !move.greenToMove;
+            pos.phase = 'bobail';
+        }
+    }
+
+    // Handle phase for display
+    if (moveIndex > 0) {
+        const lastMove = gameState.moveHistory[moveIndex - 1];
+        if (lastMove.type === 'bobail') {
+            pos.phase = 'pawn';
+            pos.greenToMove = lastMove.greenToMove;
+        } else {
+            pos.phase = 'bobail';
+            pos.greenToMove = !lastMove.greenToMove;
+        }
+    }
+
+    return pos;
+}
+
+// Navigate to a specific position in history
+function navigateToMove(index) {
+    const maxIndex = gameState.moveHistory.length;
+    index = Math.max(0, Math.min(index, maxIndex));
+
+    if (index === maxIndex) {
+        // Return to current game state (exit replay mode)
+        gameState.replayMode = false;
+        gameState.replayIndex = maxIndex;
+    } else {
+        // Enter/continue replay mode
+        gameState.replayMode = true;
+        gameState.replayIndex = index;
+    }
+
+    gameState.selectedSquare = null;
+    gameState.validMoves = [];
+
+    renderBoard();
+    updateUI();
+    updateNavButtons();
+}
+
+// Update navigation button states
+function updateNavButtons() {
+    const maxIndex = gameState.moveHistory.length;
+    const current = gameState.replayMode ? gameState.replayIndex : maxIndex;
+
+    // Update both nav bars (history panel and board nav)
+    const navIds = [
+        ['nav-start', 'nav-prev', 'nav-next', 'nav-end', 'nav-position'],
+        ['board-nav-start', 'board-nav-prev', 'board-nav-next', 'board-nav-end', 'board-nav-position']
+    ];
+
+    navIds.forEach(([startId, prevId, nextId, endId, posId]) => {
+        const startBtn = document.getElementById(startId);
+        const prevBtn = document.getElementById(prevId);
+        const nextBtn = document.getElementById(nextId);
+        const endBtn = document.getElementById(endId);
+        const posEl = document.getElementById(posId);
+
+        if (startBtn) startBtn.disabled = current === 0;
+        if (prevBtn) prevBtn.disabled = current === 0;
+        if (nextBtn) nextBtn.disabled = current >= maxIndex;
+        if (endBtn) endBtn.disabled = current >= maxIndex;
+        if (posEl) posEl.textContent = `${current}/${maxIndex}`;
+    });
 }
 
 // ==================== AI with Alpha-Beta Search ====================
 
-// Evaluation function - returns score from White's perspective
+// Evaluation function - returns score from Green's perspective
 function evaluate(state) {
     const bobailRow = Math.floor(state.bobailSquare / BOARD_SIZE);
 
     // Terminal conditions
-    if (bobailRow === 0) return 10000; // White wins
-    if (bobailRow === BOARD_SIZE - 1) return -10000; // Black wins
+    if (bobailRow === 0) return 10000; // Green wins
+    if (bobailRow === BOARD_SIZE - 1) return -10000; // Red wins
 
     // Check if bobail is trapped
     const bobailMoves = getBobailMovesForState(state);
     if (bobailMoves.length === 0) {
-        // Whoever's turn it is wins (they trapped the bobail)
-        return state.whiteToMove ? 10000 : -10000;
+        // The opponent trapped the bobail, so opponent wins
+        // If it's Green's turn and bobail is trapped, Red wins (trapped Green)
+        return state.greenToMove ? -10000 : 10000;
     }
 
     let score = 0;
 
-    // Bobail position - closer to opponent's home is better
-    // White wants bobail on row 4 (score negative for white perspective since black wins there)
-    // Actually: White wants bobail near row 0, Black wants near row 4
-    // From White's perspective: bobail near row 0 is good (positive)
-    score += (BOARD_SIZE - 1 - bobailRow) * 100; // Higher = bobail closer to White's home (row 0)
+    // Bobail position - closer to home row is better for that player
+    // Green wants bobail near row 0, Red wants near row 4
+    // From Green's perspective: bobail near row 0 is good (positive)
+    score += (BOARD_SIZE - 1 - bobailRow) * 100; // Higher = bobail closer to Green's home (row 0)
 
     // Bobail mobility
     score += bobailMoves.length * 10;
 
     // Pawn positioning - control center and block opponent
-    for (const sq of state.whitePawns) {
+    for (const sq of state.greenPawns) {
         const [r, c] = toRowCol(sq);
         // Pawns closer to center columns are better
         score += (2 - Math.abs(c - 2)) * 5;
@@ -468,7 +770,7 @@ function evaluate(state) {
         score += r * 3;
     }
 
-    for (const sq of state.blackPawns) {
+    for (const sq of state.redPawns) {
         const [r, c] = toRowCol(sq);
         score -= (2 - Math.abs(c - 2)) * 5;
         score -= (BOARD_SIZE - 1 - r) * 3;
@@ -481,7 +783,7 @@ function evaluate(state) {
 function getBobailMovesForState(state) {
     const moves = [];
     const [row, col] = toRowCol(state.bobailSquare);
-    const occupied = new Set([...state.whitePawns, ...state.blackPawns, state.bobailSquare]);
+    const occupied = new Set([...state.greenPawns, ...state.redPawns, state.bobailSquare]);
 
     for (const [dr, dc] of DIRECTIONS) {
         const newRow = row + dr;
@@ -500,18 +802,25 @@ function getBobailMovesForState(state) {
 function getPawnMovesForState(state, sq) {
     const moves = [];
     const [row, col] = toRowCol(sq);
-    const occupied = new Set([...state.whitePawns, ...state.blackPawns, state.bobailSquare]);
+    const occupied = new Set([...state.greenPawns, ...state.redPawns, state.bobailSquare]);
 
     for (const [dr, dc] of DIRECTIONS) {
         let newRow = row + dr;
         let newCol = col + dc;
+        let lastValidSq = null;
 
         while (isValidSquare(newRow, newCol)) {
             const newSq = toSquare(newRow, newCol);
             if (occupied.has(newSq)) break;
-            moves.push(newSq);
+
+            // Official rules: must move as far as possible
+            lastValidSq = newSq;
             newRow += dr;
             newCol += dc;
+        }
+
+        if (lastValidSq !== null) {
+            moves.push(lastValidSq);
         }
     }
     return moves;
@@ -529,7 +838,7 @@ function generateFullMoves(state) {
             bobailSquare: bobailTo
         };
 
-        const pawns = state.whiteToMove ? state.whitePawns : state.blackPawns;
+        const pawns = state.greenToMove ? state.greenPawns : state.redPawns;
 
         for (let i = 0; i < pawns.length; i++) {
             const pawnSq = pawns[i];
@@ -552,20 +861,20 @@ function generateFullMoves(state) {
 
 // Apply a full move to a state and return new state
 function applyFullMove(state, move) {
-    const newWhitePawns = [...state.whitePawns];
-    const newBlackPawns = [...state.blackPawns];
+    const newGreenPawns = [...state.greenPawns];
+    const newRedPawns = [...state.redPawns];
 
-    if (state.whiteToMove) {
-        newWhitePawns[move.pawnIndex] = move.pawnTo;
+    if (state.greenToMove) {
+        newGreenPawns[move.pawnIndex] = move.pawnTo;
     } else {
-        newBlackPawns[move.pawnIndex] = move.pawnTo;
+        newRedPawns[move.pawnIndex] = move.pawnTo;
     }
 
     return {
-        whitePawns: newWhitePawns,
-        blackPawns: newBlackPawns,
+        greenPawns: newGreenPawns,
+        redPawns: newRedPawns,
         bobailSquare: move.bobailTo,
-        whiteToMove: !state.whiteToMove
+        greenToMove: !state.greenToMove
     };
 }
 
@@ -619,47 +928,90 @@ function alphaBeta(state, depth, alpha, beta, maximizing) {
     }
 }
 
-// AI makes a move using solver data or alpha-beta search
-async function makeAIMove() {
+// Show/hide thinking indicator
+function setThinking(thinking) {
+    gameState.aiThinking = thinking;
+    const turnIndicator = document.getElementById('turn-indicator');
+    if (turnIndicator) {
+        turnIndicator.classList.toggle('thinking', thinking);
+    }
+    updateUI();
+}
+
+// AI makes a move using alpha-beta search
+function makeAIMove() {
     if (gameState.gameOver || gameState.animating) return;
+    if (!shouldAIMove()) return; // Safety check - don't move if not AI's turn
 
-    // Try to use solver data first (perfect play)
-    await fetchSolverData();
-    const solverMove = getSolverBestMove();
+    setThinking(true);
 
-    if (solverMove) {
-        // Use solver's move (perfect play)
-        if (gameState.phase === 'bobail') {
-            makeMove(solverMove.bobail_to);
+    // Use setTimeout to allow UI to update before heavy computation
+    setTimeout(async () => {
+        await doAIMove();
+        // Note: for perfect AI, setThinking(false) is called inside doAIMovePerfect
+        // For regular AI, we call it here
+        if (DIFFICULTY[gameState.difficulty] !== 'perfect') {
+            setThinking(false);
         }
-        setTimeout(() => {
-            if (gameState.phase === 'pawn' && !gameState.gameOver && !gameState.animating) {
-                gameState.selectedSquare = solverMove.pawn_from;
-                makeMove(solverMove.pawn_to);
-            }
-        }, 350);
+    }, 50);
+}
+
+// Actual AI move logic
+async function doAIMove() {
+    // Handle first move (pawn only, no bobail - core Bobail rule)
+    if (gameState.isFirstMove) {
+        // On first move, just pick a pawn move (no bobail move)
+        const pawns = gameState.greenToMove ? gameState.greenPawns : gameState.redPawns;
+        // Simple heuristic: move a central pawn toward center
+        const centerPawn = pawns[2]; // Middle pawn
+        const pawnMoves = getPawnMovesForState({
+            greenPawns: [...gameState.greenPawns],
+            redPawns: [...gameState.redPawns],
+            bobailSquare: gameState.bobailSquare
+        }, centerPawn);
+
+        if (pawnMoves.length > 0) {
+            gameState.selectedSquare = centerPawn;
+            // Pick a move toward center (square 12)
+            const bestMove = pawnMoves.reduce((best, sq) => {
+                const distToBobail = Math.abs(sq - gameState.bobailSquare);
+                const bestDist = Math.abs(best - gameState.bobailSquare);
+                return distToBobail < bestDist ? sq : best;
+            }, pawnMoves[0]);
+            makeMove(bestMove);
+        }
         return;
     }
 
-    // Fallback to alpha-beta search
+    // Check if using perfect solver (impossible difficulty)
+    if (DIFFICULTY[gameState.difficulty] === 'perfect') {
+        await doAIMovePerfect();
+        return;
+    }
+
+    // Convert gameState to search state
     const state = {
-        whitePawns: [...gameState.whitePawns],
-        blackPawns: [...gameState.blackPawns],
+        greenPawns: [...gameState.greenPawns],
+        redPawns: [...gameState.redPawns],
         bobailSquare: gameState.bobailSquare,
-        whiteToMove: gameState.whiteToMove
+        greenToMove: gameState.greenToMove
     };
 
+    // Search depth based on difficulty
     const depth = DIFFICULTY[gameState.difficulty] || 3;
-    const maximizing = state.whiteToMove;
+    const maximizing = state.greenToMove;
 
     const result = alphaBeta(state, depth, -Infinity, Infinity, maximizing);
 
     if (result.move) {
+        // Make bobail move
         if (gameState.phase === 'bobail') {
             makeMove(result.move.bobailTo);
         }
+
+        // Make pawn move (after animation completes)
         setTimeout(() => {
-            if (gameState.phase === 'pawn' && !gameState.gameOver && !gameState.animating) {
+            if (gameState.phase === 'pawn' && !gameState.gameOver && !gameState.animating && shouldAIMove()) {
                 gameState.selectedSquare = result.move.pawnFrom;
                 makeMove(result.move.pawnTo);
             }
@@ -667,8 +1019,139 @@ async function makeAIMove() {
     }
 }
 
+// AI move using perfect solver database
+async function doAIMovePerfect() {
+    const state = {
+        greenPawns: [...gameState.greenPawns],
+        redPawns: [...gameState.redPawns],
+        bobailSquare: gameState.bobailSquare,
+        greenToMove: gameState.greenToMove
+    };
+
+    // Build list of all possible moves first, then evaluate in parallel
+    const bobailMoves = getBobailMoves();
+    const moveList = [];
+
+    for (const bobTo of bobailMoves) {
+        const midState = {
+            greenPawns: [...state.greenPawns],
+            redPawns: [...state.redPawns],
+            bobailSquare: bobTo,
+            greenToMove: state.greenToMove
+        };
+
+        const pawns = state.greenToMove ? state.greenPawns : state.redPawns;
+        for (const pawnFrom of pawns) {
+            const pawnMoves = getPawnMovesFrom(pawnFrom, midState);
+            for (const pawnTo of pawnMoves) {
+                const pawnList = state.greenToMove ? [...state.greenPawns] : [...state.redPawns];
+                const idx = pawnList.indexOf(pawnFrom);
+                if (idx >= 0) pawnList[idx] = pawnTo;
+
+                const afterState = {
+                    greenPawns: state.greenToMove ? pawnList : [...state.greenPawns],
+                    redPawns: state.greenToMove ? [...state.redPawns] : pawnList,
+                    bobailSquare: bobTo,
+                    greenToMove: !state.greenToMove
+                };
+
+                moveList.push({ bobailTo: bobTo, pawnFrom, pawnTo, afterState });
+            }
+        }
+    }
+
+    // Evaluate all moves in parallel for speed
+    const evalPromises = moveList.map(async (move) => {
+        const result = await lookupPosition(move.afterState);
+        if (!result || result.result === 'unknown') {
+            return { ...move, eval: 'unknown' };
+        }
+        // Flip perspective: result is from opponent's view
+        let evalForUs;
+        if (result.result === 'win') evalForUs = 'loss';
+        else if (result.result === 'loss') evalForUs = 'win';
+        else evalForUs = 'draw';
+        return { ...move, eval: evalForUs };
+    });
+
+    const allMoves = await Promise.all(evalPromises);
+
+    // Count evaluations for debugging
+    const counts = { win: 0, draw: 0, loss: 0, unknown: 0 };
+    for (const m of allMoves) counts[m.eval]++;
+    console.log('Perfect AI move evaluations:', counts);
+
+    // Find the best move: prefer win > draw > loss > unknown
+    let bestMove = null;
+    const evalOrder = { win: 0, draw: 1, unknown: 2, loss: 3 };
+
+    for (const move of allMoves) {
+        if (!bestMove || evalOrder[move.eval] < evalOrder[bestMove.eval]) {
+            bestMove = move;
+        }
+    }
+
+    console.log('Perfect AI best move:', bestMove ?
+        `B->${bestMove.bobailTo} P:${bestMove.pawnFrom}->${bestMove.pawnTo} (${bestMove.eval})` : 'none');
+
+    if (bestMove) {
+        // Make bobail move
+        if (gameState.phase === 'bobail') {
+            makeMove(bestMove.bobailTo);
+        }
+
+        // Make pawn move (after animation completes)
+        setTimeout(() => {
+            if (gameState.phase === 'pawn' && !gameState.gameOver && !gameState.animating && shouldAIMove()) {
+                gameState.selectedSquare = bestMove.pawnFrom;
+                makeMove(bestMove.pawnTo);
+            }
+        }, 350);
+    }
+
+    setThinking(false);
+}
+
+// Handle square click in setup mode
+function handleSetupClick(sq) {
+    const currentPiece = getPieceAt(sq);
+
+    // Remove any existing piece at this square
+    if (currentPiece === 'bobail') {
+        gameState.bobailSquare = -1; // No bobail
+    } else if (currentPiece === 'green') {
+        gameState.greenPawns = gameState.greenPawns.filter(s => s !== sq);
+    } else if (currentPiece === 'red') {
+        gameState.redPawns = gameState.redPawns.filter(s => s !== sq);
+    }
+
+    // Place new piece based on selected type
+    if (gameState.setupPiece === 'clear') {
+        // Already cleared above
+    } else if (gameState.setupPiece === 'bobail') {
+        gameState.bobailSquare = sq;
+    } else if (gameState.setupPiece === 'green') {
+        if (!gameState.greenPawns.includes(sq)) {
+            gameState.greenPawns.push(sq);
+        }
+    } else if (gameState.setupPiece === 'red') {
+        if (!gameState.redPawns.includes(sq)) {
+            gameState.redPawns.push(sq);
+        }
+    }
+
+    renderBoard();
+    updateUI();
+}
+
 // Handle square click
 function handleSquareClick(sq) {
+    // Setup mode has its own handler
+    if (gameState.setupMode) {
+        handleSetupClick(sq);
+        return;
+    }
+
     if (gameState.gameOver) return;
     if (gameState.animating) return;
     if (shouldAIMove()) return; // Not player's turn
@@ -682,19 +1165,21 @@ function handleSquareClick(sq) {
             gameState.selectedSquare = sq;
             gameState.validMoves = getBobailMoves();
             renderBoard();
+            if (gameState.hintsEnabled) requestHints();
         } else if (gameState.validMoves.includes(sq)) {
             // Move bobail to this square
             makeMove(sq);
         }
     } else {
         // Pawn phase
-        const myPawns = gameState.whiteToMove ? gameState.whitePawns : gameState.blackPawns;
+        const myPawns = gameState.greenToMove ? gameState.greenPawns : gameState.redPawns;
 
         if (myPawns.includes(sq)) {
             // Select this pawn
             gameState.selectedSquare = sq;
             gameState.validMoves = getPawnMoves(sq);
             renderBoard();
+            if (gameState.hintsEnabled) requestHints();
         } else if (gameState.validMoves.includes(sq)) {
             // Move selected pawn to this square
             makeMove(sq);
@@ -703,14 +1188,31 @@ function handleSquareClick(sq) {
 }
 
 // Render the board
-async function renderBoard() {
-    // Fetch solver data if hints enabled
-    if (gameState.hintsEnabled && !gameState.gameOver) {
-        await fetchSolverData();
-    }
-
+function renderBoard() {
     const board = document.getElementById('board');
     board.innerHTML = '';
+
+    // Get position to display (replay or current)
+    let displayPos;
+    if (gameState.replayMode) {
+        displayPos = getPositionAtMove(gameState.replayIndex);
+    } else {
+        displayPos = {
+            greenPawns: gameState.greenPawns,
+            redPawns: gameState.redPawns,
+            bobailSquare: gameState.bobailSquare,
+            greenToMove: gameState.greenToMove,
+            phase: gameState.phase
+        };
+    }
+
+    // Helper to get piece at square for display position
+    const getPieceAtDisplay = (sq) => {
+        if (sq === displayPos.bobailSquare) return 'bobail';
+        if (displayPos.greenPawns.includes(sq)) return 'green';
+        if (displayPos.redPawns.includes(sq)) return 'red';
+        return null;
+    };
 
     for (let row = 0; row < BOARD_SIZE; row++) {
         for (let col = 0; col < BOARD_SIZE; col++) {
@@ -720,21 +1222,21 @@ async function renderBoard() {
             square.classList.add((row + col) % 2 === 0 ? 'light' : 'dark');
             square.dataset.square = sq;
 
-            // Highlight selected square
-            if (sq === gameState.selectedSquare) {
+            // Highlight selected square (only when not in replay mode)
+            if (!gameState.replayMode && sq === gameState.selectedSquare) {
                 square.classList.add('selected');
             }
 
-            // Show valid moves
-            if (gameState.validMoves.includes(sq)) {
+            // Show valid moves (only when not in replay mode)
+            if (!gameState.replayMode && gameState.validMoves.includes(sq)) {
                 square.classList.add('valid-move');
                 if (isOccupied(sq)) {
                     square.classList.add('has-piece');
                 }
             }
 
-            // Add hints if enabled
-            if (gameState.hintsEnabled && !gameState.gameOver) {
+            // Add hints if enabled (only when not in replay mode)
+            if (!gameState.replayMode && gameState.hintsEnabled && !gameState.gameOver) {
                 const hint = getMoveHint(sq);
                 if (hint) {
                     square.classList.add(`hint-${hint}`);
@@ -742,10 +1244,16 @@ async function renderBoard() {
             }
 
             // Add piece if present
-            const piece = getPieceAt(sq);
+            const piece = getPieceAtDisplay(sq);
             if (piece) {
                 const pieceEl = document.createElement('div');
                 pieceEl.className = `piece ${piece}`;
+
+                // Add pulsing effect to bobail when player needs to move it (not during replay)
+                if (!gameState.replayMode && piece === 'bobail' && gameState.phase === 'bobail' && !gameState.gameOver && !shouldAIMove()) {
+                    pieceEl.classList.add('needs-move');
+                }
+
                 square.appendChild(pieceEl);
             }
 
@@ -755,75 +1263,290 @@ async function renderBoard() {
     }
 }
 
-// Convert current position to solver query format
-function positionToQuery() {
-    // Convert pawn arrays to bitmasks
+// ==================== Perfect Solver Integration ====================
+
+// Server endpoint for perfect solver (localhost when running locally)
+const SOLVER_SERVER = 'http://localhost:8081';
+
+// Cache for solver lookups to avoid repeated requests
+const solverCache = new Map();
+
+// Convert current game state to position string for solver query
+function stateToSolverPos(state) {
+    // Format: WP,BP,BOB,STM (hex,hex,int,int)
+    // WP and BP are bitmasks where bit i = pawn on square i
     let wp = 0, bp = 0;
-    for (const sq of gameState.whitePawns) wp |= (1 << sq);
-    for (const sq of gameState.blackPawns) bp |= (1 << sq);
-    const stm = gameState.whiteToMove ? 1 : 0;
-    return `${wp.toString(16)},${bp.toString(16)},${gameState.bobailSquare},${stm}`;
+    for (const sq of state.greenPawns) wp |= (1 << sq);
+    for (const sq of state.redPawns) bp |= (1 << sq);
+    const stm = state.greenToMove ? 1 : 0;
+    return `${wp.toString(16)},${bp.toString(16)},${state.bobailSquare},${stm}`;
 }
 
-// Fetch solver evaluation for current position
-async function fetchSolverData() {
-    try {
-        const query = positionToQuery();
-        const response = await fetch(`${SOLVER_URL}/lookup?pos=${query}`);
-        if (response.ok) {
-            solverData = await response.json();
-            return solverData;
-        }
-    } catch (e) {
-        // Server not available
+// Lookup position in the perfect solver (async)
+async function lookupPosition(state) {
+    const pos = stateToSolverPos(state);
+
+    // Check cache first
+    if (solverCache.has(pos)) {
+        return solverCache.get(pos);
     }
-    solverData = null;
-    return null;
+
+    try {
+        const response = await fetch(`${SOLVER_SERVER}/lookup?pos=${pos}`);
+        if (!response.ok) return null;
+
+        const data = await response.json();
+        solverCache.set(pos, data);
+        return data;
+    } catch (e) {
+        // Server not available - return null
+        return null;
+    }
 }
 
-// Get hint for a move based on solver data
+// Get evaluation for a specific move (what result would this lead to?)
+// Returns 'win', 'draw', 'loss', or null if unknown
+async function getMoveEvaluation(fromState, move, phase) {
+    if (phase === 'bobail') {
+        // For bobail moves: evaluate based on best possible pawn follow-up
+        // - If ANY pawn follow-up wins -> bobail move is WINNING
+        // - Else if ANY pawn follow-up draws -> bobail move is DRAW
+        // - Else all pawn follow-ups lose -> bobail move is LOSING
+
+        const midState = {
+            greenPawns: [...fromState.greenPawns],
+            redPawns: [...fromState.redPawns],
+            bobailSquare: move,
+            greenToMove: fromState.greenToMove
+        };
+
+        // Get all possible pawn moves after this bobail move
+        const pawns = fromState.greenToMove ? fromState.greenPawns : fromState.redPawns;
+        const pawnMoves = [];
+
+        for (const pawnSq of pawns) {
+            const moves = getPawnMovesFrom(pawnSq, midState);
+            for (const toSq of moves) {
+                pawnMoves.push({ from: pawnSq, to: toSq });
+            }
+        }
+
+        if (pawnMoves.length === 0) return 'loss'; // No pawn moves = stuck = lose
+
+        // Evaluate each pawn follow-up
+        let bestEval = 'loss';
+        for (const pm of pawnMoves) {
+            const pawnList = fromState.greenToMove ? [...fromState.greenPawns] : [...fromState.redPawns];
+            const idx = pawnList.indexOf(pm.from);
+            if (idx >= 0) pawnList[idx] = pm.to;
+
+            const afterState = {
+                greenPawns: fromState.greenToMove ? pawnList : [...fromState.greenPawns],
+                redPawns: fromState.greenToMove ? [...fromState.redPawns] : pawnList,
+                bobailSquare: move,
+                greenToMove: !fromState.greenToMove  // Turn ends after pawn move
+            };
+
+            const result = await lookupPosition(afterState);
+            if (!result || result.result === 'unknown') continue;
+
+            // Flip perspective: result is from opponent's view
+            let evalForUs;
+            if (result.result === 'win') evalForUs = 'loss';
+            else if (result.result === 'loss') evalForUs = 'win';
+            else evalForUs = 'draw';
+
+            // Keep the best evaluation
+            if (evalForUs === 'win') {
+                bestEval = 'win';
+                break;  // Can't do better than win
+            } else if (evalForUs === 'draw' && bestEval === 'loss') {
+                bestEval = 'draw';
+            }
+        }
+
+        return bestEval;
+    } else {
+        // For pawn moves: evaluate the resulting position directly
+        const pawns = fromState.greenToMove ? [...fromState.greenPawns] : [...fromState.redPawns];
+        const idx = pawns.indexOf(gameState.selectedSquare);
+        if (idx >= 0) pawns[idx] = move;
+
+        const afterState = {
+            greenPawns: fromState.greenToMove ? pawns : [...fromState.greenPawns],
+            redPawns: fromState.greenToMove ? [...fromState.redPawns] : pawns,
+            bobailSquare: fromState.bobailSquare,
+            greenToMove: !fromState.greenToMove  // Turn ends after pawn move
+        };
+
+        const result = await lookupPosition(afterState);
+        if (!result || result.result === 'unknown') return null;
+
+        // Result is from the perspective of the side to move AFTER the move (opponent)
+        // So we need to flip it to get our perspective
+        if (result.result === 'win') return 'loss';  // Opponent wins = we lose
+        if (result.result === 'loss') return 'win';  // Opponent loses = we win
+        return 'draw';
+    }
+}
+
+// Note: pendingHints, hintRequestPending, currentPositionEval are declared at the top of the file
+
+// Request hints for all valid moves (called when hints are enabled)
+async function requestHints() {
+    if (!gameState.hintsEnabled || gameState.gameOver || hintRequestPending) return;
+    if (gameState.validMoves.length === 0) return;
+
+    hintRequestPending = true;
+    pendingHints.clear();
+
+    // Show loading indicator
+    showHintLoading(true);
+
+    const currentState = {
+        greenPawns: [...gameState.greenPawns],
+        redPawns: [...gameState.redPawns],
+        bobailSquare: gameState.bobailSquare,
+        greenToMove: gameState.greenToMove
+    };
+
+    // Request evaluations for all valid moves in parallel
+    const promises = gameState.validMoves.map(async (sq) => {
+        const evaluation = await getMoveEvaluation(currentState, sq, gameState.phase);
+        pendingHints.set(sq, evaluation);
+    });
+
+    await Promise.all(promises);
+    hintRequestPending = false;
+
+    // Hide loading indicator
+    showHintLoading(false);
+
+    // Update best moves display
+    updateBestMovesDisplay();
+
+    // Re-render to show hints
+    renderBoard();
+}
+
+// Show/hide hint loading indicator
+function showHintLoading(loading) {
+    const hintLegend = document.getElementById('hint-legend');
+    if (!hintLegend) return;
+
+    if (loading) {
+        hintLegend.innerHTML = `
+            <h4>Move Evaluation</h4>
+            <div class="hint-loading">
+                <span class="loading-spinner"></span>
+                Analyzing moves...
+            </div>
+        `;
+    }
+}
+
+// Update the position evaluation display
+function updatePositionEvalDisplay() {
+    const evalValue = document.getElementById('eval-value');
+    if (evalValue && currentPositionEval) {
+        evalValue.textContent = currentPositionEval;
+        evalValue.className = 'eval-value';
+        if (currentPositionEval === 'WIN') evalValue.classList.add('win');
+        else if (currentPositionEval === 'LOSS') evalValue.classList.add('loss');
+        else if (currentPositionEval === 'DRAW') evalValue.classList.add('draw');
+    }
+}
+
+// Reset the hint legend to default state
+function resetHintLegend() {
+    const hintLegend = document.getElementById('hint-legend');
+    if (hintLegend) {
+        hintLegend.innerHTML = `
+            <h4>Move Evaluation</h4>
+            <div class="legend-item">
+                <span class="legend-color win"></span> Winning move
+            </div>
+            <div class="legend-item">
+                <span class="legend-color draw"></span> Drawing move
+            </div>
+            <div class="legend-item">
+                <span class="legend-color loss"></span> Losing move
+            </div>
+        `;
+    }
+    // Also reset position eval display
+    const evalValue = document.getElementById('eval-value');
+    if (evalValue) {
+        evalValue.textContent = '--';
+        evalValue.className = 'eval-value';
+    }
+}
+
+// Update the best moves display (show winning moves)
+function updateBestMovesDisplay() {
+    // Count moves by evaluation
+    const winMoves = [];
+    const drawMoves = [];
+    const lossMoves = [];
+
+    for (const [sq, evaluation] of pendingHints) {
+        if (evaluation === 'win') winMoves.push(sq);
+        else if (evaluation === 'draw') drawMoves.push(sq);
+        else if (evaluation === 'loss') lossMoves.push(sq);
+    }
+
+    // Update hint legend with counts - show which player's perspective
+    const hintLegend = document.getElementById('hint-legend');
+    const currentPlayer = gameState.greenToMove ? 'Green' : 'Red';
+    const playerColor = gameState.greenToMove ? 'var(--green-piece)' : 'var(--red-piece)';
+
+    if (hintLegend) {
+        hintLegend.innerHTML = `
+            <h4>Moves for <span style="color: ${playerColor}">${currentPlayer}</span></h4>
+            <div class="legend-item">
+                <span class="legend-color win"></span> Winning: ${winMoves.length} move${winMoves.length !== 1 ? 's' : ''}
+            </div>
+            <div class="legend-item">
+                <span class="legend-color draw"></span> Drawing: ${drawMoves.length} move${drawMoves.length !== 1 ? 's' : ''}
+            </div>
+            <div class="legend-item">
+                <span class="legend-color loss"></span> Losing: ${lossMoves.length} move${lossMoves.length !== 1 ? 's' : ''}
+            </div>
+        `;
+
+        // If there are winning moves, show top 5
+        if (winMoves.length > 0) {
+            const moveList = winMoves.slice(0, 5).map(sq => squareToNotation(sq)).join(', ');
+            const moreText = winMoves.length > 5 ? ` (+${winMoves.length - 5} more)` : '';
+            hintLegend.innerHTML += `
+                <div class="best-moves">
+                    <strong>Best moves:</strong> ${moveList}${moreText}
+                </div>
+            `;
+        } else if (drawMoves.length > 0 && lossMoves.length > 0) {
+            // No winning moves, show drawing moves
+            const moveList = drawMoves.slice(0, 5).map(sq => squareToNotation(sq)).join(', ');
+            const moreText = drawMoves.length > 5 ? ` (+${drawMoves.length - 5} more)` : '';
+            hintLegend.innerHTML += `
+                <div class="best-moves">
+                    <strong>Best (draw):</strong> ${moveList}${moreText}
+                </div>
+            `;
+        }
+    }
+}
+
+// Get hint for a square (uses cached solver results)
 function getMoveHint(sq) {
     if (!gameState.validMoves.includes(sq)) return null;
-    if (!solverData || !solverData.moves) return null;
 
-    // Find the move that ends at this square
-    // For bobail phase: match bobail_to
-    // For pawn phase: match pawn_to with current selection as pawn_from
-    for (const move of solverData.moves) {
-        if (gameState.phase === 'bobail') {
-            if (move.bobail_to === sq) {
-                return move.eval || 'unknown';
-            }
-        } else {
-            // Pawn phase - need to match pawn_from (selected) and pawn_to (sq)
-            if (move.pawn_from === gameState.selectedSquare && move.pawn_to === sq) {
-                return move.eval || 'unknown';
-            }
-        }
-    }
-    return 'unknown';
-}
-
-// Get best move from solver data (for AI)
-function getSolverBestMove() {
-    if (!solverData || !solverData.moves || solverData.moves.length === 0) return null;
-
-    // Look for a move that leads to loss for opponent (win for us)
-    // In PNS: if we're winning, opponent's position after our move should be "loss"
-    for (const move of solverData.moves) {
-        if (move.eval === 'loss') {
-            return move;  // This move leads to opponent losing = good for us
-        }
+    // Return cached hint if available
+    if (pendingHints.has(sq)) {
+        return pendingHints.get(sq);
     }
 
-    // If no winning move found, try to avoid losses
-    const nonLossMoves = solverData.moves.filter(m => m.eval !== 'win');
-    if (nonLossMoves.length > 0) {
-        return nonLossMoves[Math.floor(Math.random() * nonLossMoves.length)];
-    }
-
-    // Fallback to any move
-    return solverData.moves[0];
+    // No hint available yet
+    return null;
 }
 
 // Update UI elements
@@ -832,29 +1555,32 @@ function updateUI() {
     const turnText = document.getElementById('turn-text');
     const turnDot = document.querySelector('.turn-dot');
 
-    if (gameState.gameOver) {
-        turnText.textContent = `${gameState.winner === 'white' ? 'White' : 'Black'} wins!`;
+    if (gameState.replayMode) {
+        const pos = getPositionAtMove(gameState.replayIndex);
+        turnText.textContent = `Reviewing: Move ${gameState.replayIndex}`;
+        turnDot.className = 'turn-dot';
+        turnDot.classList.add(pos.greenToMove ? 'green-dot' : 'red-dot');
+    } else if (gameState.setupMode) {
+        turnText.textContent = 'Setup Mode - Click to place pieces';
+        turnDot.className = 'turn-dot';
+    } else if (gameState.aiThinking) {
+        turnText.textContent = `${gameState.greenToMove ? 'Green' : 'Red'} is thinking...`;
+    } else if (gameState.gameOver) {
+        turnText.textContent = `${gameState.winner === 'green' ? 'Green' : 'Red'} wins!`;
     } else {
         const phaseText = gameState.phase === 'bobail' ? 'Move Bobail' : 'Move Pawn';
-        turnText.textContent = `${gameState.whiteToMove ? 'White' : 'Black'}: ${phaseText}`;
+        turnText.textContent = `${gameState.greenToMove ? 'Green' : 'Red'}: ${phaseText}`;
     }
 
-    turnDot.className = 'turn-dot';
-    turnDot.classList.add(gameState.whiteToMove ? 'white-dot' : 'black-dot');
+    if (!gameState.setupMode && !gameState.replayMode) {
+        turnDot.className = 'turn-dot';
+        turnDot.classList.add(gameState.greenToMove ? 'green-dot' : 'red-dot');
+    }
 
-    // Evaluation from solver
+    // Evaluation (placeholder)
     const evalValue = document.getElementById('eval-value');
-    if (solverData && solverData.result) {
-        const result = solverData.result.toUpperCase();
-        evalValue.textContent = result;
-        evalValue.className = 'eval-value';
-        if (result === 'WIN') evalValue.classList.add('eval-win');
-        else if (result === 'LOSS') evalValue.classList.add('eval-loss');
-        else if (result === 'DRAW') evalValue.classList.add('eval-draw');
-    } else {
-        evalValue.textContent = '--';
-        evalValue.className = 'eval-value';
-    }
+    evalValue.textContent = '--';
+    evalValue.className = 'eval-value';
 
     // Hint legend visibility
     const hintLegend = document.getElementById('hint-legend');
@@ -863,8 +1589,11 @@ function updateUI() {
     // Move history
     updateMoveHistory();
 
+    // Navigation buttons
+    updateNavButtons();
+
     // Show game over overlay if needed
-    if (gameState.gameOver) {
+    if (gameState.gameOver && !gameState.replayMode) {
         showGameOverOverlay();
     }
 }
@@ -875,19 +1604,32 @@ function updateMoveHistory() {
     moveList.innerHTML = '';
 
     let moveNum = 1;
-    for (let i = 0; i < gameState.moveHistory.length; i += 2) {
-        const bobailMove = gameState.moveHistory[i];
-        const pawnMove = gameState.moveHistory[i + 1];
+    let i = 0;
 
+    while (i < gameState.moveHistory.length) {
         const entry = document.createElement('div');
         entry.className = 'move-entry';
 
-        const color = bobailMove.whiteToMove ? 'W' : 'B';
+        const firstMove = gameState.moveHistory[i];
+        const color = firstMove.greenToMove ? 'G' : 'R';
         let text = `<span class="move-number">${moveNum}.</span>${color}: `;
-        text += `B${squareToNotation(bobailMove.from)}-${squareToNotation(bobailMove.to)}`;
 
-        if (pawnMove) {
-            text += `, ${squareToNotation(pawnMove.from)}-${squareToNotation(pawnMove.to)}`;
+        // Check if first move is pawn-only (first turn of game) or bobail+pawn
+        if (firstMove.type === 'pawn') {
+            // Pawn-only move (first turn)
+            text += `${squareToNotation(firstMove.from)}-${squareToNotation(firstMove.to)}`;
+            i++;
+        } else {
+            // Bobail move
+            text += `B${squareToNotation(firstMove.from)}-${squareToNotation(firstMove.to)}`;
+            i++;
+
+            // Check for following pawn move
+            if (i < gameState.moveHistory.length && gameState.moveHistory[i].type === 'pawn') {
+                const pawnMove = gameState.moveHistory[i];
+                text += `, ${squareToNotation(pawnMove.from)}-${squareToNotation(pawnMove.to)}`;
+                i++;
+            }
         }
 
         entry.innerHTML = text;
@@ -940,7 +1682,7 @@ function showGameOverOverlay() {
         title.textContent = 'You Lose!';
         title.style.color = 'var(--loss-color)';
     } else {
-        title.textContent = `${gameState.winner === 'white' ? 'White' : 'Black'} Wins!`;
+        title.textContent = `${gameState.winner === 'green' ? 'Green' : 'Red'} Wins!`;
         title.style.color = '';
     }
 
@@ -965,10 +1707,10 @@ function hideGameOverOverlay() {
 
 // Encode game state to a compact string
 function encodeGameState() {
-    const wp = gameState.whitePawns.map(s => s.toString(36)).join('');
-    const bp = gameState.blackPawns.map(s => s.toString(36)).join('');
+    const wp = gameState.greenPawns.map(s => s.toString(36)).join('');
+    const bp = gameState.redPawns.map(s => s.toString(36)).join('');
     const bob = gameState.bobailSquare.toString(36);
-    const turn = gameState.whiteToMove ? 'w' : 'b';
+    const turn = gameState.greenToMove ? 'w' : 'b';
     const phase = gameState.phase === 'bobail' ? 'B' : 'P';
     return `${wp}-${bp}-${bob}${turn}${phase}`;
 }
@@ -992,15 +1734,66 @@ function decodeGameState(code) {
         if (bob < 0 || bob >= 25) return null;
 
         return {
-            whitePawns: wp,
-            blackPawns: bp,
+            greenPawns: wp,
+            redPawns: bp,
             bobailSquare: bob,
-            whiteToMove: turn,
+            greenToMove: turn,
             phase: phase
         };
     } catch (e) {
         return null;
     }
+}
+
+// Exit setup mode and validate position
+function exitSetupMode() {
+    // Check if position is valid
+    const hasValidBobail = gameState.bobailSquare >= 0 && gameState.bobailSquare < 25;
+
+    if (!hasValidBobail) {
+        showToast('Please place the Bobail on the board');
+        return false;
+    }
+
+    if (gameState.greenPawns.length === 0 && gameState.redPawns.length === 0) {
+        showToast('Please place at least one pawn');
+        return false;
+    }
+
+    // Set who moves based on checkbox
+    const greenToMoveCheckbox = document.getElementById('setup-green-to-move');
+    gameState.greenToMove = greenToMoveCheckbox ? greenToMoveCheckbox.checked : true;
+
+    // Reset game state for play
+    gameState.phase = 'bobail';
+    gameState.selectedSquare = null;
+    gameState.validMoves = [];
+    gameState.moveHistory = [];
+    gameState.gameOver = false;
+    gameState.winner = null;
+    gameState.isFirstMove = false; // Not first move in custom setup
+
+    // Check for immediate game over
+    const result = checkGameOver();
+    if (result.over) {
+        gameState.gameOver = true;
+        gameState.winner = result.winner;
+    }
+
+    // Auto-select bobail if it's player's turn
+    if (!gameState.gameOver && gameState.phase === 'bobail' && !shouldAIMove()) {
+        gameState.selectedSquare = gameState.bobailSquare;
+        gameState.validMoves = getBobailMoves();
+    }
+
+    showToast('Position set - game started');
+
+    // Trigger AI if needed
+    if (!gameState.gameOver && shouldAIMove()) {
+        setTimeout(makeAIMove, 500);
+    }
+
+    return true;
 }
 
 // Share current position via URL
@@ -1024,12 +1817,17 @@ function loadFromURL() {
     if (pos) {
         const state = decodeGameState(pos);
         if (state) {
-            gameState.whitePawns = state.whitePawns;
-            gameState.blackPawns = state.blackPawns;
+            gameState.greenPawns = state.greenPawns;
+            gameState.redPawns = state.redPawns;
             gameState.bobailSquare = state.bobailSquare;
-            gameState.whiteToMove = state.whiteToMove;
+            gameState.greenToMove = state.greenToMove;
             gameState.phase = state.phase;
             gameState.playerColor = 'both'; // Analysis mode for shared positions
+            // Auto-select bobail if it's bobail phase
+            if (gameState.phase === 'bobail') {
+                gameState.selectedSquare = gameState.bobailSquare;
+                gameState.validMoves = getBobailMoves();
+            }
             renderBoard();
             updateUI();
             showToast('Position loaded from URL');
@@ -1052,12 +1850,16 @@ function showToast(message) {
 
 // Event listeners
 document.addEventListener('DOMContentLoaded', () => {
-    // Load saved stats and initialize sounds
+    // Load saved stats, game history, and initialize sounds
     loadStats();
+    loadGameHistory();
     initSounds();
 
     // Initialize game
     initGame();
+
+    // Update game history display
+    updateGameHistoryDisplay();
 
     // Load position from URL if present
     loadFromURL();
@@ -1069,8 +1871,15 @@ document.addEventListener('DOMContentLoaded', () => {
         e.target.innerHTML = gameState.hintsEnabled
             ? '<span class="hint-icon">💡</span> Hide Hints'
             : '<span class="hint-icon">💡</span> Show Hints';
+        // Show/hide evaluation with hints
+        const evalEl = document.getElementById('evaluation');
+        evalEl.classList.toggle('hidden', !gameState.hintsEnabled);
         renderBoard();
         updateUI();
+        // Request hints from solver if enabled
+        if (gameState.hintsEnabled && gameState.validMoves.length > 0) {
+            requestHints();
+        }
     });
 
     // New game
@@ -1082,11 +1891,36 @@ document.addEventListener('DOMContentLoaded', () => {
     // Undo
     document.getElementById('undo').addEventListener('click', undoMove);
 
+    // History navigation - helper functions
+    const navStart = () => navigateToMove(0);
+    const navPrev = () => {
+        const current = gameState.replayMode ? gameState.replayIndex : gameState.moveHistory.length;
+        navigateToMove(current - 1);
+    };
+    const navNext = () => {
+        const current = gameState.replayMode ? gameState.replayIndex : gameState.moveHistory.length;
+        navigateToMove(current + 1);
+    };
+    const navEnd = () => navigateToMove(gameState.moveHistory.length);
+
+    // History panel navigation
+    document.getElementById('nav-start').addEventListener('click', navStart);
+    document.getElementById('nav-prev').addEventListener('click', navPrev);
+    document.getElementById('nav-next').addEventListener('click', navNext);
+    document.getElementById('nav-end').addEventListener('click', navEnd);
+
+    // Board navigation (below board)
+    document.getElementById('board-nav-start').addEventListener('click', navStart);
+    document.getElementById('board-nav-prev').addEventListener('click', navPrev);
+    document.getElementById('board-nav-next').addEventListener('click', navNext);
+    document.getElementById('board-nav-end').addEventListener('click', navEnd);
+
     // Player color select
     document.getElementById('player-color').addEventListener('change', (e) => {
         gameState.playerColor = e.target.value;
-        // Don't reset, just update and check if AI should move
+        // Don't reset game, just update and check if AI should move
         renderBoard();
+        updateUI();
         if (shouldAIMove()) {
             setTimeout(makeAIMove, 500);
         }
@@ -1127,11 +1961,123 @@ document.addEventListener('DOMContentLoaded', () => {
         });
     }
 
+    // Setup mode button
+    const setupBtn = document.getElementById('setup-btn');
+    if (setupBtn) {
+        setupBtn.addEventListener('click', () => {
+            gameState.setupMode = !gameState.setupMode;
+            const setupPanel = document.getElementById('setup-panel');
+            setupPanel.classList.toggle('hidden', !gameState.setupMode);
+            setupBtn.classList.toggle('active', gameState.setupMode);
+            setupBtn.textContent = gameState.setupMode ? 'Playing' : 'Setup';
+
+            if (gameState.setupMode) {
+                // Entering setup mode
+                gameState.gameOver = false;
+                gameState.selectedSquare = null;
+                gameState.validMoves = [];
+                hideGameOverOverlay();
+            } else {
+                // Exiting setup mode - validate and start game
+                exitSetupMode();
+            }
+            renderBoard();
+            updateUI();
+        });
+    }
+
+    // Setup piece buttons
+    document.querySelectorAll('.setup-piece-btn').forEach(btn => {
+        btn.addEventListener('click', () => {
+            document.querySelectorAll('.setup-piece-btn').forEach(b => b.classList.remove('active'));
+            btn.classList.add('active');
+            gameState.setupPiece = btn.dataset.piece;
+        });
+    });
+
+    // Setup done button
+    const setupDoneBtn = document.getElementById('setup-done');
+    if (setupDoneBtn) {
+        setupDoneBtn.addEventListener('click', () => {
+            exitSetupMode();
+            gameState.setupMode = false;
+            document.getElementById('setup-panel').classList.add('hidden');
+            document.getElementById('setup-btn').classList.remove('active');
+            document.getElementById('setup-btn').textContent = 'Setup';
+            renderBoard();
+            updateUI();
+        });
+    }
+
+    // Setup clear all button
+    const setupClearBtn = document.getElementById('setup-clear-all');
+    if (setupClearBtn) {
+        setupClearBtn.addEventListener('click', () => {
+            gameState.greenPawns = [];
+            gameState.redPawns = [];
+            gameState.bobailSquare = -1;
+            renderBoard();
+            updateUI();
+        });
+    }
+
+    // Setup import button
+    const setupImportBtn = document.getElementById('setup-import');
+    if (setupImportBtn) {
+        setupImportBtn.addEventListener('click', () => {
+            const input = prompt('Paste a shared position URL or code:');
+            if (!input) return;
+
+            // Extract position code from URL or use raw input
+            let code = input.trim();
+            if (code.includes('?pos=')) {
+                const match = code.match(/[?&]pos=([^&]+)/);
+                if (match) code = match[1];
+            }
+
+            const state = decodeGameState(code);
+            if (state) {
+                gameState.greenPawns = state.greenPawns;
+                gameState.redPawns = state.redPawns;
+                gameState.bobailSquare = state.bobailSquare;
+                // Update the checkbox to match imported state
+                const checkbox = document.getElementById('setup-green-to-move');
+                if (checkbox) checkbox.checked = state.greenToMove;
+                renderBoard();
+                updateUI();
+                showToast('Position imported');
+            } else {
+                showToast('Invalid position code');
+            }
+        });
+    }
+
     // Keyboard controls
     document.addEventListener('keydown', (e) => {
-        if (gameState.gameOver || gameState.animating || shouldAIMove()) return;
+        // Arrow keys for history navigation (always available)
+        if (e.key === 'ArrowLeft') {
+            e.preventDefault();
+            const current = gameState.replayMode ? gameState.replayIndex : gameState.moveHistory.length;
+            navigateToMove(current - 1);
+            return;
+        } else if (e.key === 'ArrowRight') {
+            e.preventDefault();
+            const current = gameState.replayMode ? gameState.replayIndex : gameState.moveHistory.length;
+            navigateToMove(current + 1);
+            return;
+        } else if (e.key === 'Home') {
+            e.preventDefault();
+            navigateToMove(0);
+            return;
+        } else if (e.key === 'End') {
+            e.preventDefault();
+            navigateToMove(gameState.moveHistory.length);
+            return;
+        }
 
-        // Arrow keys for navigation
+        if (gameState.gameOver || gameState.animating || shouldAIMove() || gameState.replayMode) return;
+
+        // Other keys only when playing
         if (e.key === 'Escape') {
             gameState.selectedSquare = null;
             gameState.validMoves = [];
