@@ -1823,6 +1823,10 @@ function loadFromURL() {
             gameState.greenToMove = state.greenToMove;
             gameState.phase = state.phase;
             gameState.playerColor = 'both'; // Analysis mode for shared positions
+            // Set difficulty to impossible (perfect solver) for testing solver positions
+            gameState.difficulty = 'impossible';
+            const diffSelect = document.getElementById('difficulty');
+            if (diffSelect) diffSelect.value = 'impossible';
             // Auto-select bobail if it's bobail phase
             if (gameState.phase === 'bobail') {
                 gameState.selectedSquare = gameState.bobailSquare;
@@ -1830,7 +1834,7 @@ function loadFromURL() {
             }
             renderBoard();
             updateUI();
-            showToast('Position loaded from URL');
+            showToast('Position loaded - using perfect solver');
         }
     }
 }
