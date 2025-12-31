@@ -59,6 +59,7 @@ void init_move_tables() {
         }
 
         // Build neighbor table (1-step moves for Bobail)
+        // Bobail moves to any adjacent square (including diagonals)
         neighbors[sq].clear();
         for (Direction d : ALL_DIRECTIONS) {
             if (can_move(sq, d)) {
@@ -115,17 +116,40 @@ std::vector<std::pair<int, int>> generate_pawn_moves(uint32_t pawns, uint32_t oc
     return moves;
 }
 
+bool is_starting_position(const State& s) {
+    // Starting position: Green (white) to move, all pawns on home rows, Bobail at center
+    return s.white_to_move &&
+           s.white_pawns == 0b00000'00000'00000'00000'11111 &&  // Row 0
+           s.black_pawns == 0b11111'00000'00000'00000'00000 &&  // Row 4
+           s.bobail_sq == 12;  // Center
+}
+
 std::vector<Move> generate_moves(const State& s) {
     std::vector<Move> moves;
 
-    // First generate all Bobail moves
+    uint32_t our_pawns = s.white_to_move ? s.white_pawns : s.black_pawns;
+
+    // First turn (starting position): only pawn moves, Bobail stays put
+    if (is_starting_position(s)) {
+        uint32_t occupied = s.occupied();
+        auto pawn_moves = generate_pawn_moves(our_pawns, occupied);
+
+        for (auto [from, to] : pawn_moves) {
+            Move m;
+            m.bobail_to = s.bobail_sq;  // Bobail doesn't move
+            m.pawn_from = static_cast<uint8_t>(from);
+            m.pawn_to = static_cast<uint8_t>(to);
+            moves.push_back(m);
+        }
+        return moves;
+    }
+
+    // Normal turn: Bobail move + pawn move
     auto bobail_moves = generate_bobail_moves(s);
 
     if (bobail_moves.empty()) {
         return moves;  // No legal moves - current player loses
     }
-
-    uint32_t our_pawns = s.white_to_move ? s.white_pawns : s.black_pawns;
 
     // For each Bobail move, generate all pawn moves
     for (int bobail_dest : bobail_moves) {

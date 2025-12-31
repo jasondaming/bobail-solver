@@ -17,7 +17,13 @@
 
 namespace bobail {
 
-RetrogradeSolverDB::RetrogradeSolverDB() {}
+RetrogradeSolverDB::RetrogradeSolverDB() {
+    fast_write_options_.disableWAL = true;
+    fast_write_options_.sync = false;
+
+    metadata_write_options_.disableWAL = false;
+    metadata_write_options_.sync = true;
+}
 
 RetrogradeSolverDB::~RetrogradeSolverDB() {
     close();
@@ -28,19 +34,33 @@ bool RetrogradeSolverDB::open(const std::string& db_path) {
     options.create_if_missing = true;
     options.create_missing_column_families = true;
 
-    // Optimize for bulk loading
-    options.max_background_jobs = 4;
-    options.max_write_buffer_number = 4;
-    options.write_buffer_size = 64 * 1024 * 1024;  // 64MB
-    options.target_file_size_base = 64 * 1024 * 1024;
+    // Optimize for bulk loading/heavy writes
+    int parallelism = std::max(2u, std::thread::hardware_concurrency());
+    options.IncreaseParallelism(parallelism);
+    options.OptimizeLevelStyleCompaction();
+    options.allow_concurrent_memtable_write = true;
+    options.enable_write_thread_adaptive_yield = true;
+    options.use_adaptive_mutex = true;
+    options.max_background_jobs = std::max(options.max_background_jobs, 8);
+    options.max_write_buffer_number = 6;
+    options.min_write_buffer_number_to_merge = 2;
+    options.write_buffer_size = 256 * 1024 * 1024;  // 256MB
+    options.target_file_size_base = 256 * 1024 * 1024;
+    options.bytes_per_sync = 1 * 1024 * 1024;
+    options.wal_bytes_per_sync = 1 * 1024 * 1024;
+    options.max_total_wal_size = 4ULL * 1024 * 1024 * 1024;
+    options.compaction_readahead_size = 2 * 1024 * 1024;
+    options.new_table_reader_for_compaction_inputs = true;
 
     // Block cache for random read performance (2GB - reduced to leave room for bloom filter)
     auto cache = rocksdb::NewLRUCache(2ULL * 1024 * 1024 * 1024);
     rocksdb::BlockBasedTableOptions table_options;
     table_options.block_cache = cache;
-    table_options.block_size = 16 * 1024;  // 16KB blocks
+    table_options.block_size = 32 * 1024;  // 32KB blocks
     table_options.cache_index_and_filter_blocks = true;
     table_options.pin_l0_filter_and_index_blocks_in_cache = true;
+    table_options.cache_index_and_filter_blocks_with_high_priority = true;
+    table_options.pin_top_level_index_and_filter = true;
 
     // Column family options with the table factory
     rocksdb::ColumnFamilyOptions cf_opts;
@@ -122,7 +142,7 @@ void RetrogradeSolverDB::save_metadata() {
     put_u64("queue_head", queue_head_);
     put_u64("queue_tail", queue_tail_);
 
-    db_->Write(rocksdb::WriteOptions(), &batch);
+    db_->Write(metadata_write_options_, &batch);
 }
 
 void RetrogradeSolverDB::load_metadata() {
@@ -234,7 +254,7 @@ uint32_t RetrogradeSolverDB::get_or_create_state(uint64_t packed) {
     rocksdb::WriteBatch batch;
     batch.Put(cf_states_, id_key, info_val);
     batch.Put(cf_packed_to_id_, key, std::string(reinterpret_cast<char*>(&id), sizeof(id)));
-    db_->Write(rocksdb::WriteOptions(), &batch);
+    db_->Write(fast_write_options_, &batch);
 
     return id;
 }
@@ -265,7 +285,7 @@ bool RetrogradeSolverDB::get_state_info(uint32_t id, StateInfoCompact& info) con
 bool RetrogradeSolverDB::put_state_info(uint32_t id, const StateInfoCompact& info) {
     std::string key(reinterpret_cast<char*>(&id), sizeof(id));
     std::string value(reinterpret_cast<const char*>(&info), sizeof(info));
-    return db_->Put(rocksdb::WriteOptions(), cf_states_, key, value).ok();
+    return db_->Put(fast_write_options_, cf_states_, key, value).ok();
 }
 
 void RetrogradeSolverDB::add_predecessor(uint32_t state_id, uint32_t pred_id) {
@@ -278,7 +298,7 @@ void RetrogradeSolverDB::add_predecessor(uint32_t state_id, uint32_t pred_id) {
     // Append new predecessor
     value.append(reinterpret_cast<char*>(&pred_id), sizeof(pred_id));
 
-    db_->Put(rocksdb::WriteOptions(), cf_predecessors_, key, value);
+    db_->Put(fast_write_options_, cf_predecessors_, key, value);
 }
 
 std::vector<uint32_t> RetrogradeSolverDB::get_predecessors(uint32_t state_id) const {
@@ -329,7 +349,7 @@ void RetrogradeSolverDB::enumerate_states() {
         // Add to queue
         std::string queue_key(reinterpret_cast<char*>(&queue_tail_), sizeof(queue_tail_));
         std::string queue_val(reinterpret_cast<char*>(&start_id_), sizeof(start_id_));
-        db_->Put(rocksdb::WriteOptions(), cf_queue_, queue_key, queue_val);
+        db_->Put(fast_write_options_, cf_queue_, queue_key, queue_val);
         queue_tail_++;
         enum_processed_ = 0;
     }
@@ -408,7 +428,7 @@ void RetrogradeSolverDB::enumerate_states() {
 
         // Flush batch periodically
         if (batch_count >= BATCH_SIZE) {
-            db_->Write(rocksdb::WriteOptions(), &batch);
+            db_->Write(fast_write_options_, &batch);
             batch.Clear();
             batch_count = 0;
         }
@@ -419,7 +439,7 @@ void RetrogradeSolverDB::enumerate_states() {
 
         // Save metadata periodically
         if (checkpoint_interval_ > 0 && enum_processed_ - last_save >= checkpoint_interval_) {
-            db_->Write(rocksdb::WriteOptions(), &batch);
+            db_->Write(fast_write_options_, &batch);
             batch.Clear();
             batch_count = 0;
             save_metadata();
@@ -430,7 +450,7 @@ void RetrogradeSolverDB::enumerate_states() {
 
     // Flush remaining batch
     if (batch_count > 0) {
-        db_->Write(rocksdb::WriteOptions(), &batch);
+        db_->Write(fast_write_options_, &batch);
     }
 
     if (progress_cb_) {
@@ -452,7 +472,7 @@ void RetrogradeSolverDB::enumerate_states_parallel() {
         // Add to queue
         std::string queue_key(reinterpret_cast<char*>(&queue_tail_), sizeof(queue_tail_));
         std::string queue_val(reinterpret_cast<char*>(&start_id_), sizeof(start_id_));
-        db_->Put(rocksdb::WriteOptions(), cf_queue_, queue_key, queue_val);
+        db_->Put(fast_write_options_, cf_queue_, queue_key, queue_val);
         queue_tail_++;
         enum_processed_ = 0;
 
@@ -800,7 +820,7 @@ void RetrogradeSolverDB::enumerate_states_parallel() {
         // This ensures if we crash after write, we don't re-process the same batch
         queue_head_ = batch_end;
 
-        db_->Write(rocksdb::WriteOptions(), &batch);
+        db_->Write(fast_write_options_, &batch);
 
         auto t7e = std::chrono::steady_clock::now();
 
@@ -901,7 +921,7 @@ void RetrogradeSolverDB::build_predecessors() {
         }
 
         if (batch_count >= BATCH_SIZE) {
-            db_->Write(rocksdb::WriteOptions(), &batch);
+            db_->Write(fast_write_options_, &batch);
             batch.Clear();
             batch_count = 0;
         }
@@ -912,7 +932,7 @@ void RetrogradeSolverDB::build_predecessors() {
     }
 
     if (batch_count > 0) {
-        db_->Write(rocksdb::WriteOptions(), &batch);
+        db_->Write(fast_write_options_, &batch);
     }
 
     if (progress_cb_) {
@@ -984,7 +1004,7 @@ void RetrogradeSolverDB::build_predecessors_parallel() {
                         }
                         batch.Put(cf_predecessors_, key, existing);
                     }
-                    db_->Write(rocksdb::WriteOptions(), &batch);
+                    db_->Write(fast_write_options_, &batch);
                     total_relations += local_relations;
                     local_preds.clear();
                     local_relations = 0;
@@ -1004,7 +1024,7 @@ void RetrogradeSolverDB::build_predecessors_parallel() {
                     }
                     batch.Put(cf_predecessors_, key, existing);
                 }
-                db_->Write(rocksdb::WriteOptions(), &batch);
+                db_->Write(fast_write_options_, &batch);
                 total_relations += local_relations;
             }
         });
@@ -1219,7 +1239,7 @@ void RetrogradeSolverDB::build_predecessors_streaming() {
                     }
                     batch.Put(cf_predecessors_, key, value);
                 }
-                db_->Write(rocksdb::WriteOptions(), &batch);
+                db_->Write(fast_write_options_, &batch);
                 total_relations += flushed;
                 local_preds.clear();
                 local_pred_count = 0;
@@ -1514,7 +1534,7 @@ void RetrogradeSolverDB::mark_terminals_parallel() {
 
         // Write batch when full
         if (batch_count >= BATCH_SIZE) {
-            db_->Write(rocksdb::WriteOptions(), &batch);
+            db_->Write(fast_write_options_, &batch);
             batch.Clear();
             batch_count = 0;
         }
@@ -1526,14 +1546,14 @@ void RetrogradeSolverDB::mark_terminals_parallel() {
         if ((processed % CHECKPOINT_INTERVAL == 0) || time_for_checkpoint) {
             // Flush any pending batch
             if (batch_count > 0) {
-                db_->Write(rocksdb::WriteOptions(), &batch);
+                db_->Write(fast_write_options_, &batch);
                 batch.Clear();
                 batch_count = 0;
             }
 
             // Save checkpoint
             std::string ckpt_val(reinterpret_cast<char*>(&processed), sizeof(processed));
-            db_->Put(rocksdb::WriteOptions(), cf_metadata_, ckpt_key, ckpt_val);
+            db_->Put(metadata_write_options_, cf_metadata_, ckpt_key, ckpt_val);
 
             last_checkpoint = now;
 
@@ -1552,11 +1572,11 @@ void RetrogradeSolverDB::mark_terminals_parallel() {
 
     // Write any remaining batch
     if (batch_count > 0) {
-        db_->Write(rocksdb::WriteOptions(), &batch);
+        db_->Write(fast_write_options_, &batch);
     }
 
     // Clear checkpoint (phase complete)
-    db_->Delete(rocksdb::WriteOptions(), cf_metadata_, ckpt_key);
+    db_->Delete(metadata_write_options_, cf_metadata_, ckpt_key);
 
     num_wins_ = local_wins;
     num_losses_ = local_losses;
@@ -1621,7 +1641,7 @@ void RetrogradeSolverDB::propagate() {
                 batch_count++;
 
                 if (batch_count >= BATCH_SIZE) {
-                    db_->Write(rocksdb::WriteOptions(), &batch);
+                    db_->Write(fast_write_options_, &batch);
                     batch.Clear();
                     batch_count = 0;
                 }
@@ -1635,7 +1655,7 @@ void RetrogradeSolverDB::propagate() {
 
         // Write remaining batch
         if (batch_count > 0) {
-            db_->Write(rocksdb::WriteOptions(), &batch);
+            db_->Write(fast_write_options_, &batch);
         }
 
         std::cerr << "Propagation queue built: " << prop_tail << " solved states to process" << std::endl;
@@ -1672,7 +1692,7 @@ void RetrogradeSolverDB::propagate() {
                 if (my_pos >= current_tail) {
                     // Flush remaining batch
                     if (local_batch_count > 0) {
-                        db_->Write(rocksdb::WriteOptions(), &local_batch);
+                        db_->Write(fast_write_options_, &local_batch);
                     }
                     break;
                 }
@@ -1773,7 +1793,7 @@ void RetrogradeSolverDB::propagate() {
 
             // Flush local batch periodically
             if (local_batch_count >= LOCAL_BATCH_SIZE) {
-                db_->Write(rocksdb::WriteOptions(), &local_batch);
+                db_->Write(fast_write_options_, &local_batch);
                 local_batch.Clear();
                 local_batch_count = 0;
             }
@@ -1807,7 +1827,7 @@ void RetrogradeSolverDB::propagate() {
                     std::memcpy(&ckpt_val[0], &current_head, sizeof(current_head));
                     std::memcpy(&ckpt_val[8], &current_tail, sizeof(current_tail));
                     std::memcpy(&ckpt_val[16], &current_propagated, sizeof(current_propagated));
-                    db_->Put(rocksdb::WriteOptions(), cf_metadata_, ckpt_key, ckpt_val);
+                    db_->Put(metadata_write_options_, cf_metadata_, ckpt_key, ckpt_val);
                     last_checkpoint_time.store(elapsed);
                 }
             }
@@ -1841,7 +1861,7 @@ void RetrogradeSolverDB::propagate() {
         std::memcpy(&ckpt_val[0], &prop_head, sizeof(prop_head));
         std::memcpy(&ckpt_val[8], &prop_tail, sizeof(prop_tail));
         std::memcpy(&ckpt_val[16], &propagated, sizeof(propagated));
-        db_->Put(rocksdb::WriteOptions(), cf_metadata_, ckpt_key, ckpt_val);
+        db_->Put(metadata_write_options_, cf_metadata_, ckpt_key, ckpt_val);
     }
 
     std::cerr << "Propagation complete: processed " << propagated << " states" << std::endl;
@@ -1877,7 +1897,7 @@ void RetrogradeSolverDB::propagate() {
             ++num_draws_;
 
             if (batch_count >= 10000) {
-                db_->Write(rocksdb::WriteOptions(), &batch);
+                db_->Write(fast_write_options_, &batch);
                 batch.Clear();
                 batch_count = 0;
             }
@@ -1890,11 +1910,11 @@ void RetrogradeSolverDB::propagate() {
     }
 
     if (batch_count > 0) {
-        db_->Write(rocksdb::WriteOptions(), &batch);
+        db_->Write(fast_write_options_, &batch);
     }
 
     // Clear checkpoint
-    db_->Delete(rocksdb::WriteOptions(), cf_metadata_, ckpt_key);
+    db_->Delete(metadata_write_options_, cf_metadata_, ckpt_key);
 
     std::cerr << "Marked " << draws_marked << " states as draws" << std::endl;
 
@@ -2023,7 +2043,7 @@ bool RetrogradeSolverDB::import_checkpoint(const std::string& checkpoint_file) {
         batch.Put(cf_packed_to_id_, packed_key, id_val);
 
         if ((i + 1) % BATCH_SIZE == 0) {
-            db_->Write(rocksdb::WriteOptions(), &batch);
+            db_->Write(fast_write_options_, &batch);
             batch.Clear();
 
             if ((i + 1) % 1000000 == 0) {
@@ -2035,7 +2055,7 @@ bool RetrogradeSolverDB::import_checkpoint(const std::string& checkpoint_file) {
     }
 
     // Write remaining batch
-    db_->Write(rocksdb::WriteOptions(), &batch);
+    db_->Write(fast_write_options_, &batch);
     std::cerr << "\nStates import complete.\n";
 
     num_states_ = file_num_states;
@@ -2060,7 +2080,7 @@ bool RetrogradeSolverDB::import_checkpoint(const std::string& checkpoint_file) {
         queue_tail_++;
 
         if ((i + 1) % BATCH_SIZE == 0) {
-            db_->Write(rocksdb::WriteOptions(), &batch);
+            db_->Write(fast_write_options_, &batch);
             batch.Clear();
 
             if ((i + 1) % 10000000 == 0) {
@@ -2071,7 +2091,7 @@ bool RetrogradeSolverDB::import_checkpoint(const std::string& checkpoint_file) {
         }
     }
 
-    db_->Write(rocksdb::WriteOptions(), &batch);
+    db_->Write(fast_write_options_, &batch);
 
     in.close();
     save_metadata();

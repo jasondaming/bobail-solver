@@ -46,8 +46,13 @@ std::vector<int> generate_bobail_moves(const State& s);
 // Returns list of (from, to) pairs
 std::vector<std::pair<int, int>> generate_pawn_moves(uint32_t pawns, uint32_t occupied);
 
+// Check if state is the starting position (first turn)
+// On first turn, only pawn moves are allowed (no Bobail move)
+bool is_starting_position(const State& s);
+
 // Generate all complete moves (Bobail + pawn) from position
 // This is the main move generation function
+// On first turn (starting position), generates pawn-only moves
 std::vector<Move> generate_moves(const State& s);
 
 // Apply a move to a state, returning the new state

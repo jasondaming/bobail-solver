@@ -200,6 +200,10 @@ private:
 
     ProgressCallback progress_cb_;
 
+    // Write options (fast vs durable)
+    rocksdb::WriteOptions fast_write_options_;
+    rocksdb::WriteOptions metadata_write_options_;
+
     // Parallelization settings
     int num_threads_ = 1;
 

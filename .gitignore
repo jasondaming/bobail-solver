@@ -60,3 +60,5 @@ nul
 # Temporary files
 temp.txt
 *.tmp
+build_linux/
+*.pdf
