@@ -236,7 +236,21 @@ private:
 
             auto child_it = tt_.find(child_hash);
             if (child_it == tt_.end()) {
-                // Unexpanded child - this is our target
+                // Check if unexpanded child is terminal
+                GameResult gr = check_terminal(child_state);
+                if (gr != GameResult::ONGOING) {
+                    // Terminal child - expand it immediately to record result
+                    expand_node(child_state, child_hash, !is_or_node);
+                    // Update this node with new terminal child
+                    update_node(state, hash, is_or_node);
+                    // Re-check if we're now solved
+                    auto& entry = tt_[hash];
+                    if (entry.proof == 0 || entry.disproof == 0) {
+                        return;  // Solved by terminal child
+                    }
+                    continue;  // Check next child
+                }
+                // Unexpanded non-terminal child - this is our target
                 best_child_state = child_state;
                 best_child_hash = child_hash;
                 break;
@@ -351,20 +365,37 @@ private:
             State child_state = apply_move(state, move);
             uint64_t child_hash = canonical_hash(child_state);
 
+            uint32_t child_proof = 1;
+            uint32_t child_disproof = 1;
+
             auto child_it = tt_.find(child_hash);
             if (child_it != tt_.end()) {
                 ++known_children;
-                min_proof = std::min(min_proof, child_it->second.proof);
-                min_disproof = std::min(min_disproof, child_it->second.disproof);
-                sum_proof += child_it->second.proof;
-                sum_disproof += child_it->second.disproof;
+                child_proof = child_it->second.proof;
+                child_disproof = child_it->second.disproof;
             } else {
-                // Unknown child counts as proof=1, disproof=1
-                min_proof = std::min(min_proof, 1u);
-                min_disproof = std::min(min_disproof, 1u);
-                sum_proof += 1;
-                sum_disproof += 1;
+                // Check if child is terminal (even if not in TT)
+                GameResult gr = check_terminal(child_state);
+                if (gr != GameResult::ONGOING) {
+                    bool child_wins = (gr == GameResult::WHITE_WINS && child_state.white_to_move) ||
+                                      (gr == GameResult::BLACK_WINS && !child_state.white_to_move);
+                    bool child_loses = (gr == GameResult::WHITE_WINS && !child_state.white_to_move) ||
+                                       (gr == GameResult::BLACK_WINS && child_state.white_to_move);
+                    if (child_wins) {
+                        child_proof = 0;
+                        child_disproof = PN_INFINITY;
+                    } else if (child_loses) {
+                        child_proof = PN_INFINITY;
+                        child_disproof = 0;
+                    }
+                }
+                // Else: unknown non-terminal child uses default PN=1, DN=1
             }
+
+            min_proof = std::min(min_proof, child_proof);
+            min_disproof = std::min(min_disproof, child_disproof);
+            sum_proof += child_proof;
+            sum_disproof += child_disproof;
         }
 
         // Clamp sums

@@ -153,17 +153,33 @@ std::vector<Move> generate_moves(const State& s) {
 
     // For each Bobail move, generate all pawn moves
     for (int bobail_dest : bobail_moves) {
-        // Update occupied mask for pawn move generation
-        uint32_t new_occupied = (s.white_pawns | s.black_pawns | (1u << bobail_dest));
+        int bobail_row = State::row(bobail_dest);
 
-        auto pawn_moves = generate_pawn_moves(our_pawns, new_occupied);
+        // Check if bobail move is terminal (reaches goal row)
+        // White (green) wins on row 0, Black (red) wins on row 4
+        bool is_terminal = (bobail_row == 0 || bobail_row == BOARD_SIZE - 1);
 
-        for (auto [from, to] : pawn_moves) {
+        if (is_terminal) {
+            // Terminal move - no pawn move needed, game ends immediately
+            // Use first pawn staying in place as a dummy move
+            int first_pawn = std::countr_zero(our_pawns);
             Move m;
             m.bobail_to = static_cast<uint8_t>(bobail_dest);
-            m.pawn_from = static_cast<uint8_t>(from);
-            m.pawn_to = static_cast<uint8_t>(to);
+            m.pawn_from = static_cast<uint8_t>(first_pawn);
+            m.pawn_to = static_cast<uint8_t>(first_pawn);  // No actual pawn move
             moves.push_back(m);
+        } else {
+            // Non-terminal: generate all pawn moves
+            uint32_t new_occupied = (s.white_pawns | s.black_pawns | (1u << bobail_dest));
+            auto pawn_moves = generate_pawn_moves(our_pawns, new_occupied);
+
+            for (auto [from, to] : pawn_moves) {
+                Move m;
+                m.bobail_to = static_cast<uint8_t>(bobail_dest);
+                m.pawn_from = static_cast<uint8_t>(from);
+                m.pawn_to = static_cast<uint8_t>(to);
+                moves.push_back(m);
+            }
         }
     }
 

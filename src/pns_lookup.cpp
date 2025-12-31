@@ -108,17 +108,31 @@ void lookup_position(const State& s) {
                 State child = apply_move(s, m);
                 uint64_t child_hash = canonical_hash(child);
 
-                auto child_it = pns_table.find(child_hash);
-                if (child_it != pns_table.end()) {
-                    std::cout << "  " << m.to_string() << " -> "
-                              << result_to_string(child_it->second.result);
-                    if (entry.result == 1 && child_it->second.result == 2) {
-                        std::cout << " *";  // Mark winning moves
-                    }
-                    std::cout << "\n";
+                std::string child_result_str;
+                uint8_t child_result_code = 0;
+
+                // First check if child is terminal
+                GameResult gr = check_terminal(child);
+                if (gr != GameResult::ONGOING) {
+                    bool child_loses = (gr == GameResult::WHITE_WINS && !child.white_to_move) ||
+                                       (gr == GameResult::BLACK_WINS && child.white_to_move);
+                    child_result_code = child_loses ? 2 : 1;  // 2=LOSS, 1=WIN
+                    child_result_str = child_loses ? "LOSS" : "WIN";
                 } else {
-                    std::cout << "  " << m.to_string() << " -> ?\n";
+                    auto child_it = pns_table.find(child_hash);
+                    if (child_it != pns_table.end()) {
+                        child_result_code = child_it->second.result;
+                        child_result_str = result_to_string(child_result_code);
+                    } else {
+                        child_result_str = "?";
+                    }
                 }
+
+                std::cout << "  " << m.to_string() << " -> " << child_result_str;
+                if (entry.result == 1 && child_result_code == 2) {
+                    std::cout << " *";  // Mark winning moves
+                }
+                std::cout << "\n";
             }
         }
     } else {
@@ -174,19 +188,37 @@ void lookup_json(const State& s) {
             State child = apply_move(s, m);
             uint64_t child_hash = canonical_hash(child);
 
-            auto child_it = pns_table.find(child_hash);
-            if (child_it != pns_table.end()) {
-                if (!first) std::cout << ",";
-                first = false;
+            std::string child_result;
 
-                std::string child_result = result_to_string(child_it->second.result);
-                std::transform(child_result.begin(), child_result.end(), child_result.begin(), ::tolower);
-
-                std::cout << "{\"bobail_to\":" << (int)m.bobail_to
-                          << ",\"pawn_from\":" << (int)m.pawn_from
-                          << ",\"pawn_to\":" << (int)m.pawn_to
-                          << ",\"eval\":\"" << child_result << "\"}";
+            // First check if child is terminal (game over)
+            GameResult gr = check_terminal(child);
+            if (gr != GameResult::ONGOING) {
+                // Terminal position - determine result from child's perspective
+                bool child_wins = (gr == GameResult::WHITE_WINS && child.white_to_move) ||
+                                  (gr == GameResult::BLACK_WINS && !child.white_to_move);
+                bool child_loses = (gr == GameResult::WHITE_WINS && !child.white_to_move) ||
+                                   (gr == GameResult::BLACK_WINS && child.white_to_move);
+                if (child_wins) child_result = "win";
+                else if (child_loses) child_result = "loss";
+                else child_result = "draw";
+            } else {
+                // Check PNS table
+                auto child_it = pns_table.find(child_hash);
+                if (child_it != pns_table.end()) {
+                    child_result = result_to_string(child_it->second.result);
+                    std::transform(child_result.begin(), child_result.end(), child_result.begin(), ::tolower);
+                } else {
+                    continue;  // Skip moves with unknown non-terminal children
+                }
             }
+
+            if (!first) std::cout << ",";
+            first = false;
+
+            std::cout << "{\"bobail_to\":" << (int)m.bobail_to
+                      << ",\"pawn_from\":" << (int)m.pawn_from
+                      << ",\"pawn_to\":" << (int)m.pawn_to
+                      << ",\"eval\":\"" << child_result << "\"}";
         }
         std::cout << "]";
     } else {
