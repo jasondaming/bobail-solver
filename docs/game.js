@@ -988,8 +988,15 @@ async function doAIMove() {
     }
 
     // Check if using perfect solver (impossible difficulty)
+    console.log('Checking difficulty:', gameState.difficulty, 'DIFFICULTY value:', DIFFICULTY[gameState.difficulty]);
     if (DIFFICULTY[gameState.difficulty] === 'perfect') {
-        await doAIMovePerfect();
+        console.log('Calling doAIMovePerfect...');
+        try {
+            await doAIMovePerfect();
+            console.log('doAIMovePerfect completed');
+        } catch (e) {
+            console.error('doAIMovePerfect error:', e);
+        }
         return;
     }
 
