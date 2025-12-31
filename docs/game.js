@@ -940,13 +940,16 @@ function setThinking(thinking) {
 
 // AI makes a move using alpha-beta search
 function makeAIMove() {
+    console.log('makeAIMove called', { gameOver: gameState.gameOver, animating: gameState.animating });
     if (gameState.gameOver || gameState.animating) return;
     if (!shouldAIMove()) return; // Safety check - don't move if not AI's turn
 
     setThinking(true);
+    console.log('setThinking(true), scheduling doAIMove in 50ms');
 
     // Use setTimeout to allow UI to update before heavy computation
     setTimeout(async () => {
+        console.log('doAIMove timeout fired');
         await doAIMove();
         // Note: for perfect AI, setThinking(false) is called inside doAIMovePerfect
         // For regular AI, we call it here
@@ -958,6 +961,7 @@ function makeAIMove() {
 
 // Actual AI move logic
 async function doAIMove() {
+    console.log('doAIMove started', { isFirstMove: gameState.isFirstMove, difficulty: gameState.difficulty });
     // Handle first move (pawn only, no bobail - core Bobail rule)
     if (gameState.isFirstMove) {
         // On first move, just pick a pawn move (no bobail move)
@@ -1021,6 +1025,7 @@ async function doAIMove() {
 
 // AI move using perfect solver database
 async function doAIMovePerfect() {
+    console.log('doAIMovePerfect started');
     const state = {
         greenPawns: [...gameState.greenPawns],
         redPawns: [...gameState.redPawns],
